@@ -1104,6 +1104,7 @@ function render({ items, ctx }) {
   }
 
   renderProfile(ctx);
+  applyMapOutlook(ctx.outlook);
   renderAltPicker(ctx);
   refreshPsMini();
   lastCtx = ctx;
@@ -1260,6 +1261,29 @@ function renderMap() {
   $("#map-when").textContent = W.gridTime ? `Model layers for ${fmtZ(W.gridTime)} · ${metars.length} METARs` : "";
 }
 
+// outlook: reports that describe now (METARs, SIGMETs, G-AIRMETs, PIREPs) are switched off and marked;
+// the model layers stay, since they're forecasts for the flight time
+const OBS_LAYERS = ["METARs: category and ceiling", "SIGMETs", "G-AIRMETs", "PIREPs"];
+let mapOutlook = null;
+function applyMapOutlook(o) {
+  const on = !!o, banner = $("#map-outlook");
+  $("#map-card").classList.toggle("outlook-card", on);
+  banner.hidden = !on;
+  if (on) banner.textContent = `Outlook: model forecast for ${W.gridTime ? fmtLocal(W.gridTime) : "your flight time"} (${o.lead} h ahead). Current reports (METARs, SIGMETs, G-AIRMETs, PIREPs) are hidden: they describe now, not your flight.`;
+  if (!map) return;
+  if (on !== mapOutlook) { // switching modes: hide the reports in an outlook, bring the defaults back after it
+    for (const n of OBS_LAYERS) {
+      const lg = overlays[n];
+      if (!lg) continue;
+      if (on) map.removeLayer(lg); else if (DEFAULT_ON.has(n)) lg.addTo(map);
+    }
+    mapOutlook = on;
+  }
+  for (const label of document.querySelectorAll("#map .leaflet-control-layers-overlays label"))
+    label.classList.toggle("stale", on && OBS_LAYERS.some(n => label.textContent.includes(n)));
+  if (on && W.gridTime) $("#map-when").textContent = `Model layers for ${fmtLocal(W.gridTime)} (${fmtZ(W.gridTime)}) · outlook`;
+}
+
 // ---------- vertical profile (SVG) ----------
 // View window in nm along the route and ft MSL; x1/y1 null = whole route / automatic height
 const PZ = { x0: 0, x1: null, y0: 0, y1: null, total: null, last: null, ctx: null };
@@ -1269,7 +1293,17 @@ function renderProfile(ctx) {
   PZ.ctx = ctx;
   const s = ctx.sim;
   const samples = (W.om || []).filter(o => o.pass?.cloud?.lv?.length);
-  if (!s || !samples.length) { PZ.last = null; $("#pz-range").textContent = ""; el.innerHTML = `<p class="sub">${W.loading ? "Loading…" : "The profile appears once the route and model data load."}</p>`; return; }
+  const ob = $("#profile-outlook");
+  $("#profile").closest(".card").classList.toggle("outlook-card", !!ctx.outlook);
+  ob.hidden = !ctx.outlook;
+  if (ctx.outlook) ob.textContent = `Model forecast for your flight time, ${ctx.outlook.lead} h ahead: use it for trends, not details.`;
+  if (!s || !samples.length) {
+    PZ.last = null; $("#pz-range").textContent = "";
+    const why = W.loading ? "Loading…" : ctx.outlook && ctx.outlook.lead > 16 * 24 ? "The forecast model reaches 16 days ahead, so there's no profile for this flight yet."
+      : W.omError ? `Model data unavailable: ${esc(W.omError)}. Press Refresh weather in a minute.` : "The profile appears once the route and model data load.";
+    el.innerHTML = `<p class="sub">${why}</p>`;
+    return;
+  }
   const total = s.total + (ctx.altSim?.total || 0);
   if (PZ.total == null || Math.abs(PZ.total - total) > 0.5) { PZ.x0 = 0; PZ.x1 = null; } // new route: show all of it
   PZ.total = total;
