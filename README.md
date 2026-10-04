@@ -35,7 +35,7 @@ Enter your route, departure time, airplane and personal minimums. IFR Go/No-Go p
 
 - **Departure, destination and alternate weather.** METARs and TAFs at your times, checked against the approach minimums you fly plus your personal margins, crosswind and gust limits.
 - **Alternate requirement and alternate minimums (§91.169).** It shows whether you need an alternate, and lists every airport with a published approach within 100 nm of the destination, nearest first, with its distance and whether its TAF meets alternate minimums at your arrival time.
-- **Fuel (§91.167).** Trip, alternate and 45-minute reserve, from a climb/cruise/descent simulation with forecast winds aloft, plus your own landing reserve.
+- **Fuel (§91.167).** Trip, alternate and 45-minute reserve, from a climb/cruise/descent simulation using your airplane's performance table and forecast winds aloft, plus your own landing reserve.
 - **Along the route.** SIGMETs, convective SIGMETs, G-AIRMETs, PIREPs, freezing level vs. MEA and cruise, model cloud bases and tops.
 - **Instability.** Model CAPE and lifted index along the route at the time you pass each point; the worse of the two decides.
 - **Pilot and airplane.** IFR currency, recent IMC and time in type, sleep, and inspections (annual, pitot-static, transponder, ELT, VOR check).
@@ -47,6 +47,7 @@ It also shows:
 - **Leg-by-leg winds, groundspeed, time and fuel.**
 - **Links to the current approach plates** from the FAA d-TPP.
 - **A Reverse button** that flies the route the other way, swaps the approaches and picks a new alternate.
+- **Airplane presets saved by registration**, with a ForeFlight-style performance table for each power setting (75%, 65% and any others you add).
 
 Your settings and personal minimums are saved in your browser. Nothing about you or your flight is uploaded anywhere; the app only downloads weather, charts, map tiles and fonts.
 
@@ -75,7 +76,11 @@ The server listens only on your own computer (127.0.0.1). It isn't meant to be p
 ## Getting started
 
 1. Fields marked **Example values** come pre-filled. Replace them with your own airplane, approaches, inspection dates and personal minimums.
-2. The airplane preset is a Mooney M20K 231. Choose **Custom** and enter your POH climb, cruise and fuel figures for anything else.
+2. Set up your airplane under **Airplane**. The built-in example is a Mooney M20K 231. To make your own preset:
+   - Choose **＋ New airplane…** and enter the registration and type.
+   - Fill in the whole-airplane figures: usable and taxi fuel, maximum altitude, demonstrated crosswind, climb and descent fuel flow, and descent rate.
+   - For each power setting (75% and 65% to start; **＋ Power setting** adds more), fill in the table: pressure altitude, climb IAS, rate of climb, cruise TAS, fuel flow and descent IAS. You can type it, paste it from a spreadsheet, or use **Import file…** for a CSV or Markdown table, such as a write-up of your ForeFlight performance profile. Blank cells are filled in from the rows around them.
+   - Press **Save preset**. Your presets stay in this browser; **Export** saves one to a file you can import on another computer.
 3. Enter the route as departure, fixes or navaids, and destination, separated by spaces, e.g. `KAEX PICAN 0R1`. Airways and SIDs/STARs aren't expanded yet, so list their fixes.
 
 ## Limits
