@@ -137,6 +137,19 @@ details[open] summary { margin-bottom: 10px; }
   .layout { grid-template-columns: 1fr; }
   .verdict-col { position: static; order: -1; }
 }
+/* Desktop: flight data and decision scroll on their own, each under the mouse, with a divider between */
+@media (min-width: 901px) {
+  html, body { height: 100%; }
+  body { padding: 0 16px; overflow: hidden; }
+  .wrap { height: 100%; display: flex; flex-direction: column; }
+  header.top { flex: none; padding-top: 20px; margin-bottom: 14px; }
+  #stopped, #banners { flex: none; }
+  .layout { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); align-items: stretch; gap: 0; }
+  .pane { overflow-y: auto; min-height: 0; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; padding-bottom: 32px; }
+  .layout > form.pane { padding: 2px 18px 32px 2px; }
+  .verdict-col.pane { position: static; align-content: start; padding: 2px 2px 32px 18px; border-left: 2px solid var(--line); }
+  .pane:hover { scrollbar-color: var(--accent) transparent; }
+}
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
 /* Route, legs and performance tables */
@@ -253,7 +266,7 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
   </dialog>
 
   <div class="layout">
-    <form id="plan" class="stack" autocomplete="off" onsubmit="return false">
+    <form id="plan" class="stack pane" aria-label="Flight data" autocomplete="off" onsubmit="return false">
 
       <fieldset>
         <legend>Flight</legend>
@@ -481,7 +494,7 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
       </fieldset>
     </form>
 
-    <aside class="verdict-col">
+    <aside class="verdict-col pane" aria-label="Decision">
       <div class="verdict" id="verdict" aria-live="polite">
         <div class="lbl">Decision</div>
         <div class="word">—</div>
