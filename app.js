@@ -431,6 +431,19 @@ async function loadAll() {
       apt[a.token] = rec;
     }));
     const altCands = dest ? await fetchAltCands(dest.faa || dest.ident) : [];
+    // beyond the TAFs: NBM guidance for the airports and the alternate candidates; SPC outlooks for days 1-3
+    const etaGuess = etdMs + dist / 140 * 3600e3;
+    let nbm = null, nbmError = null;
+    if (leadH(etaGuess + 3 * 3600e3) > OUTLOOK_AFTER_H) {
+      const nbmIds = [...new Set([...airports.map(nbmId), ...altCands.map(a => a.id)].filter(Boolean))].join(",");
+      const [nbs, nbe] = await Promise.all([
+        leadH(etdMs) < 74 ? getJSON("/nbm", { prod: "nbs", ids: nbmIds }).catch(e => ({ error: e.message })) : null,
+        leadH(etaGuess) > 66 ? getJSON("/nbm", { prod: "nbe", ids: nbmIds }).catch(e => ({ error: e.message })) : null,
+      ]);
+      nbm = { nbs: nbs?.stations ? nbs : null, nbe: nbe?.stations ? nbe : null };
+      nbmError = nbs?.error || nbe?.error || null;
+    }
+    const spc = leadH(etdMs) < 84 ? (await Promise.all([1, 2, 3].map(d => getJSON("/spc", { day: d }).catch(() => null)))).filter(Boolean) : [];
     const pirepIds = [...new Set([dep, dest].filter(Boolean).map(a => apt[a.token].metar?.icaoId || apt[a.token].wxId))];
     const pireps = (await Promise.all(pirepIds.map(id => wx("pirep", { id, distance: 100, age: 3 }).catch(() => [])))).flat();
     if (seq !== loadSeq) return;
@@ -441,7 +454,7 @@ async function loadAll() {
       charts: { dep: charts[0], dest: charts[1], alt: charts[2] },
       pireps: pireps.filter(p => !seen.has(p.rawOb) && seen.add(p.rawOb)),
       om: omList.map((o, i) => ({ ...omSamples[i], hourly: o.hourly })), omError: om?.error || null,
-      areaMetars, grid: gridCells, gridTime: midHour, box, altCands,
+      areaMetars, grid: gridCells, gridTime: midHour, box, altCands, nbm, nbmError, spc,
       loadedAt: new Date(), error: null, loading: false };
     fillCharts();
     renderMap();
@@ -513,7 +526,6 @@ function evaluate(f) {
 
   if (Number.isNaN(+etd)) { add("stop", "Plan", "Set a departure time."); return { items, ctx }; }
   if (etd < now - 15 * 60e3) add("caution", "Plan", "The departure time is in the past; forecasts may not match your flight.", "", 1);
-  if (etd - now > 30 * 3600e3) add("caution", "Plan", "Departure is more than 30 hours out, beyond most TAFs. Re-run this check within 24 hours of departure.", "", 2);
 
   // ----- Route and performance -----
   const pts = W.route?.points || [];
@@ -600,6 +612,21 @@ function evaluate(f) {
   if (dep) ctx.cards.push({ role: "Departure", id: depId, a: depA, win: depWin, w: depW, prev: depPrev });
   if (dest) ctx.cards.push({ role: "Destination", id: destId, a: dstA, win: dstWin, w: dstW, prev: dstW.prev });
   if (altPt) ctx.cards.push({ role: "Alternate", id: altId, a: altA, win: altWin, w: altW, prev: altW.prev });
+  // beyond the TAFs: forecast guidance instead, and the verdict becomes an outlook
+  const depO = loaded ? outlookFor(dep, depA, depWin) : null, dstO = loaded ? outlookFor(dest, dstA, dstWin) : null, altO = loaded ? outlookFor(altPt, altA, altWin) : null;
+  for (const [o, card] of [[depO, "Departure"], [dstO, "Destination"], [altO, "Alternate"]]) {
+    const c = ctx.cards.find(x => x.role === card);
+    if (o && c) { c.o = o; c.prev = o.prev; c.w = o; }
+  }
+  ctx.outlook = depO || dstO || altO ? { lead: Math.round(leadH(eta)), cycle: (W.nbm?.nbs || W.nbm?.nbe)?.cycle, source: (W.nbm?.nbs || W.nbm?.nbe)?.source, tafFrom: tafCoverFrom(eta) } : null;
+  if (!ctx.outlook && etd - now > 30 * 3600e3) add("caution", "Plan", "Departure is more than 30 hours out, beyond most TAFs. Re-run this check within 24 hours of departure.", "", 2);
+  const likely = w => `most likely ${fmtCig(w.prev.cig ?? Infinity)} / ${fmtVis(w.prev.vis ?? 10)}`;
+  const ifrChance = (o, id, when, hi, lo) => {
+    const pc = Math.max(o.ifc, o.ifv), what = o.ifc >= o.ifv ? "IFR ceilings (below 1,000 ft)" : "IFR visibility (below 3 SM)";
+    if (pc >= 60) add("caution", "Weather", `${pc}% chance of ${what} at ${id} ${when}. Conditions could end up lower than the most likely values.`, "NBM", hi);
+    else if (pc >= 30) add("caution", "Weather", `${pc}% chance of ${what} at ${id} ${when}.`, "NBM", lo);
+  };
+  const noGuidance = (o, id, what, pts) => add("caution", "Weather", `No ceiling or visibility guidance for ${id} ${what}: ${o.kind === "nbe" ? "the flight is more than 72 hours out, past the NBM ceiling and visibility forecasts" : o.why}.`, "NBM", pts);
 
   let altRequired = true;
   ctx.tsForecast = false;
@@ -607,6 +634,18 @@ function evaluate(f) {
     add("stop", "Weather", W.error ? "Data couldn't be loaded, so the flight can't be assessed." : "Loading route and weather…");
   } else if (dep && dest) {
     // departure
+    if (depO) {
+      if (depO.kind === "nbs") {
+        const cig = depO.prev.cig ?? Infinity, vis = depO.prev.vis ?? 10;
+        if (cig < num(f.pmDepCig) || vis < num(f.pmDepVis)) add("stop", "Weather", `Departure ${likely(depO)} (NBM), below your departure minimums (${f.pmDepCig} ft / ${f.pmDepVis} SM).`, "NBM");
+        else if (cig < num(f.depMinCig) || vis < num(f.depMinVis)) {
+          if (f.pmReturn) add("stop", "Weather", `No return option likely: departure ${likely(depO)} (NBM), below the approach back into ${depId} (${f.depMinCig} ft / ${f.depMinVis} SM).`, "NBM");
+          else add("caution", "Weather", `No return option into ${depId} likely; you'd need a takeoff alternate within about 30 minutes.`, "NBM", 3);
+        } else add("ok", "Weather", `Departure ${likely(depO)} (NBM): within your minimums, return possible.`, "NBM");
+        ifrChance(depO, depId, "at departure", 2, 1);
+      } else noGuidance(depO, depId, "at departure", 2);
+      windChecks(add, f, P, depId, depO.prev, null, dep.runways);
+    } else {
     if (depA.tafProxy) add("caution", "Weather", `${depId} has no TAF; departure forecast taken from ${depA.tafProxy.id}, ${depA.tafProxy.d} nm away.`, "§91.103", 1);
     else if (!depA.taf && !depNow) add("caution", "Weather", `No TAF at or near ${depId}. Use the GFA to judge departure weather.`, "§91.103", 2);
     if (depPrev.cig != null || depPrev.vis != null) {
@@ -619,10 +658,28 @@ function evaluate(f) {
       } else add("ok", "Weather", `Departure ${fmtCig(cig)} / ${fmtVis(vis)}: within your minimums, return possible.`);
     }
     windChecks(add, f, P, depId, depPrev, depW.cond, dep.runways);
+    }
 
     // destination
     let altReason = "";
-    if (!dstA.taf) {
+    if (dstO) {
+      if (dstO.kind === "nbs") {
+        const cig = dstO.prev.cig ?? Infinity, vis = dstO.prev.vis ?? 10;
+        altRequired = cig < 2000 || vis < 3 || dstO.ifc >= 30;
+        altReason = altRequired ? `guidance for ${destId} is ${likely(dstO)}, with a ${dstO.ifc}% chance of IFR ceilings` : "";
+        const minCig = num(f.destMinCig) ?? 0, minVis = num(f.destMinVis) ?? 0, myCig = minCig + pmAddCig, myVis = minVis + pmAddVis;
+        const apprName = f.destChart || f.destAppr;
+        if (cig < minCig || vis < minVis) add("stop", "Weather", `${destId} is ${likely(dstO)} (NBM), below the ${apprName} minimums (${minCig} ft / ${minVis} SM).`, "NBM");
+        else if (cig < myCig || vis < myVis) add("stop", "Weather", `${destId} is ${likely(dstO)} (NBM), below your minimums for this approach (${myCig} ft / ${+myVis.toFixed(2)} SM).`, "NBM");
+        else add("ok", "Weather", `${destId} is ${likely(dstO)} (NBM), above your approach minimums (${myCig} ft / ${+myVis.toFixed(2)} SM).`, "NBM");
+        if (cig < 500 || vis < 1) add("caution", "Weather", `Low IFR is the most likely outcome at ${destId}.`, "NBM", 2);
+        ifrChance(dstO, destId, "around your arrival", 3, 2);
+      } else {
+        noGuidance(dstO, destId, "at your arrival", 3);
+        altReason = `there's no ceiling or visibility guidance for ${destId} yet`;
+      }
+      windChecks(add, f, P, destId, dstO.prev, null, dest.runways);
+    } else if (!dstA.taf) {
       add("caution", "Weather", `No TAF at or near ${destId}. Use the GFA for the destination.`, "§91.169", 3);
       altReason = "no TAF for the destination";
     } else {
@@ -653,7 +710,7 @@ function evaluate(f) {
     }
     if (!["ILS", "LPV"].includes(f.destAppr)) add("caution", "Weather", `The ${f.destAppr} minimums line has no glidepath to a DA.`, "", 1);
     if (!(W.charts?.dest?.charts || []).length) add("caution", "Plan", `No published instrument approach found for ${destId}.`, "d-TPP", 3);
-    windChecks(add, f, P, destId, dstW.prev, dstW.cond, dest.runways);
+    if (!dstO) windChecks(add, f, P, destId, dstW.prev, dstW.cond, dest.runways);
 
     // alternate
     if (altRequired) {
@@ -662,7 +719,14 @@ function evaluate(f) {
     } else add("ok", "Legal", `No alternate required: ${destId} forecast is at least 2,000 ft and 3 SM within ETA ±1 h.`, "§91.169(b)");
     if (altPt) {
       const req = { precision: [600, 2], nonprecision: [800, 2], nonstd: [num(f.altNonCig) ?? 800, num(f.altNonVis) ?? 2], none: [Math.max(mea - altPt.elevFt, 1000), 3] }[f.altType];
-      if (!altA.taf) add(altRequired ? "stop" : "caution", "Legal", `No TAF at or near ${altId}, so it can't be shown to meet alternate minimums.`, "§91.169(c)", 3);
+      if (altO) {
+        if (altO.kind === "nbs") {
+          const pc = altO.prev.cig ?? Infinity, pv = altO.prev.vis ?? 10;
+          if (pc < req[0] || pv < req[1]) add(altRequired ? "stop" : "caution", "Legal", `${altId} is ${likely(altO)} (NBM), likely below alternate minimums (${req[0]} ft / ${req[1]} SM).`, "NBM", 3);
+          else add("ok", "Legal", `${altId} likely meets alternate minimums (${req[0]} ft / ${req[1]} SM): ${likely(altO)} (NBM).`, "NBM");
+          if (altO.ifc >= 50) add("caution", "Legal", `${altO.ifc}% chance of IFR ceilings at the alternate ${altId}.`, "NBM", 1);
+        } else add("caution", "Legal", `${altId} can't be shown to meet alternate minimums yet: ${altO.kind === "nbe" ? "no ceiling or visibility guidance past 72 hours" : altO.why}.`, "NBM", 2);
+      } else if (!altA.taf) add(altRequired ? "stop" : "caution", "Legal", `No TAF at or near ${altId}, so it can't be shown to meet alternate minimums.`, "§91.169(c)", 3);
       else {
         if (altA.tafProxy) add("caution", "Legal", `${altId} has no TAF; using ${altA.tafProxy.id} (${altA.tafProxy.d} nm). Pick an alternate with its own TAF if you can.`, "§91.169(c)", 2);
         const pc = altW.prev.cig ?? Infinity, pv = altW.prev.vis ?? 99;
@@ -692,8 +756,20 @@ function evaluate(f) {
     }
 
     // thunderstorms and freezing precipitation in the TAF windows
-    for (const [id, w, extra, rec] of [[depId, depW, depNow, depA], [destId, dstW, null, dstA], [altId, altW, null, altA]]) {
-      if (!w || !id) continue;
+    for (const [id, o] of [[depId, depO], [destId, dstO], [altId, altO]]) {
+      if (!o || !id || o.kind === "none") continue;
+      const near = o.kind === "nbs" ? "within about 3 hours of your time" : "in the 12 hours around your time";
+      const [hi, mid, lo] = o.kind === "nbs" ? [50, 25, 10] : [60, 30, 15];
+      if (o.ts >= mid) ctx.tsForecast = true;
+      if (o.ts >= hi) add("stop", "Weather", `Thunderstorms likely at ${id}: ${o.ts}% chance ${near} (NBM).`, "NBM");
+      else if (o.ts >= mid) add("caution", "Weather", `${o.ts}% chance of thunderstorms at ${id} ${near} (NBM).`, "NBM", 4);
+      else if (o.ts >= lo) add("caution", "Weather", `${o.ts}% chance of thunderstorms at ${id} ${near} (NBM).`, "NBM", 1);
+      const fzra = o.pzr * o.pop / 100; // PZR is conditional on precipitation
+      if (fzra >= 10) add("stop", "Weather", `Freezing rain possible at ${id}: ${o.pop}% chance of precipitation, ${o.pzr}% of it freezing rain (NBM).`, "NBM");
+      else if (fzra >= 3) add("caution", "Weather", `Some risk of freezing rain at ${id} (NBM).`, "NBM", 3);
+    }
+    for (const [id, w, extra, rec, o] of [[depId, depW, depNow, depA, depO], [destId, dstW, null, dstA, dstO], [altId, altW, null, altA, altO]]) {
+      if (!w || !id || o) continue;
       const src = rec.tafProxy ? ` (${rec.tafProxy.id} forecast)` : "";
       const pw = (w.prev.wx.join(" ") + " " + (extra ? extra.wx.join(" ") : "")).trim();
       const cw = w.cond.wx.join(" ");
@@ -801,12 +877,25 @@ function evaluate(f) {
         } else if (g.hazard === "IFR") hz("info", "IFR", `AIRMET Sierra: ${g.due_to || "IFR conditions"}`);
       }
       hz("info", "G-AIRMET", `Snapshot valid ${fmtZ(new Date(snap))} checked against the route`);
-    } else hz("caution", "G-AIRMET", "No G-AIRMET snapshot covers the flight time (they run 12 h ahead). Check the GFA closer to departure.");
+    } else hz(ctx.outlook ? "info" : "caution", "G-AIRMET", "No G-AIRMET snapshot covers the flight time (they run 12 h ahead). Check the GFA closer to departure.");
 
-    // PIREPs near departure and destination, at or below cruise + 4,000 ft
+    // SPC convective outlook areas the route crosses (days 1-3)
+    const spcHit = spcOnRoute(routePts, [etd, eta, etaAlt]);
+    if (spcHit) {
+      const lbl = `SPC Day ${spcHit.day}`, txt = `Your route crosses an SPC ${SPC_NAME[spcHit.label]} area (${spcHit.label}).`;
+      const r = SPC_RANK[spcHit.label];
+      if (r >= 4) add("stop", "Route", `${txt} Organized severe storms are expected.`, lbl);
+      else if (r === 3) add("caution", "Route", `${txt} Scattered severe storms are possible.`, lbl, 5);
+      else if (r === 2) add("caution", "Route", `${txt} Isolated severe storms are possible.`, lbl, 3);
+      else add("caution", "Route", `${txt} Thunderstorms are possible.`, lbl, 1);
+      hz(r >= 4 ? "stop" : "caution", "SPC", `${spcHit.label}: ${SPC_NAME[spcHit.label]} (Day ${spcHit.day} outlook)`);
+    } else if ((W.spc || []).length) hz("ok", "SPC", "No SPC convective outlook area on the route at your times");
+
+    // PIREPs near departure and destination, at or below cruise + 4,000 ft (only for flights in the next hours)
+    if (ctx.outlook) hz("info", "PIREPs", "Pilot reports describe the last 3 hours, so they aren't used for an outlook.");
     const rank = s => (/SEV|EXTRM/.test(s) ? 3 : /MOD/.test(s) ? 2 : /LGT|TRC/.test(s) ? 1 : 0);
     let flags = 0;
-    for (const p of W.pireps) {
+    for (const p of ctx.outlook ? [] : W.pireps) {
       const lvl = (p.fltLvl ?? 0) * 100;
       if (lvl > cruise + 4000) continue;
       const ice = Math.max(rank(p.icgInt1 || ""), rank(p.icgInt2 || ""));
@@ -817,7 +906,7 @@ function evaluate(f) {
       if (tb >= 3) { add("stop", "Route", `Severe turbulence reported at ${ft(lvl)} ft.`, "PIREP"); hz("stop", "PIREP turb", p.rawOb); flags++; }
       else if (tb === 2) { add("caution", "Route", `Moderate turbulence reported at ${ft(lvl)} ft.`, "PIREP", 1); hz("caution", "PIREP turb", p.rawOb); flags++; }
     }
-    hz(flags ? "info" : "ok", "PIREPs", `${W.pireps.length} reports within 100 nm in the last 3 h${flags ? "" : ", none with icing or turbulence at your altitudes"}`);
+    if (!ctx.outlook) hz(flags ? "info" : "ok", "PIREPs", `${W.pireps.length} reports within 100 nm in the last 3 h${flags ? "" : ", none with icing or turbulence at your altitudes"}`);
 
     // Instability from two model numbers; the worse one decides.
     // CAPE: how much energy a rising parcel would have. Lifted index: how much warmer than the air
@@ -895,6 +984,39 @@ function windChecks(add, f, P, id, prev, cond, runways) {
 }
 
 // ---------- rendering ----------
+// an airport card in outlook mode: NBM guidance instead of the TAF
+function outlookCard(c) {
+  const o = c.o, pt = c.a?.pt, st = W.nbm?.[o.kind]?.stations?.[o.id];
+  const xw = maxCrosswind(o.prev.winds || [], pt?.runways);
+  const run = o.cycle ? `NBM ${o.kind.toUpperCase()} ${o.cycle.slice(11, 13)}Z${o.source === "IEM" ? " via IEM" : ""}` : "";
+  let body;
+  if (o.kind === "nbs") {
+    const mid = (+c.win[0] + +c.win[1]) / 2;
+    const strip = (st?.rows || []).filter(r => Math.abs(Date.parse(r.t) - mid) <= 9.1 * 3600e3).map(r => {
+      const pc = Math.max(r.IFC ?? 0, r.IFV ?? 0), inWin = Math.abs(Date.parse(r.t) - mid) <= 1.6 * 3600e3;
+      return `<span class="ifr-cell${inWin ? " now" : ""}" style="--p:${pc}" title="${fmtZ(new Date(r.t))}: ${r.IFC ?? "?"}% IFR ceiling, ${r.IFV ?? "?"}% IFR visibility${r.T03 ? `, ${r.T03}% thunder` : ""}"><b>${pc}</b><i>${r.t.slice(11, 13)}Z</i></span>`;
+    }).join("");
+    body = `<dt>Most likely</dt><dd>${fmtCig(o.prev.cig ?? Infinity)} / ${fmtVis(o.prev.vis ?? 10)}</dd>
+        <dt>IFR chance</dt><dd>ceiling ${o.ifc}% · vis ${o.ifv}%</dd>
+        <dt>Thunder</dt><dd>${o.ts}% (3 h)</dd>
+        <dt>Wind</dt><dd>${o.prev.wspd} kt${o.prev.gust ? " G" + o.prev.gust : ""}${xw != null ? ` · xwind ${xw}` : ""}</dd>
+      </dl>
+      ${strip ? `<div class="ifr-strip" aria-label="Chance of IFR every 3 hours around your time">${strip}</div><div class="sub" style="font-size:0.75rem">% chance of IFR (ceiling or visibility) every 3 h; your time is outlined</div>` : ""}`;
+  } else if (o.kind === "nbe") {
+    body = `<dt>Ceiling / vis</dt><dd>no guidance past 72 h</dd>
+        <dt>Thunder</dt><dd>${o.ts}% (12 h)</dd>
+        <dt>Rain</dt><dd>${o.pop}% (12 h)</dd>
+        <dt>Wind</dt><dd>${o.prev.wspd} kt${o.prev.gust ? " G" + o.prev.gust : ""}${xw != null ? ` · xwind ${xw}` : ""}</dd>
+      </dl>`;
+  } else body = `<dt>Guidance</dt><dd>none: ${esc(o.why)}</dd></dl>`;
+  return `<div class="wx outlook-wx">
+      <div class="wx-head"><div><span class="role">${c.role} · outlook</span><br><b>${esc(c.id)}</b></div><span class="cat OUT" title="Forecast guidance, not a TAF">NBM</span></div>
+      <div class="name">${esc(pt?.name || "")}${pt ? ` · ${pt.elevFt} ft` : ""}${run ? `<br>${esc(run)}` : ""}</div>
+      <dl class="kv">
+        <dt>Window</dt><dd title="${fmtZ(c.win[0])}–${fmtZ(c.win[1])}">${fmtLocal(c.win[0])}–${new Date(c.win[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })} local</dd>
+        ${body}
+    </div>`;
+}
 const AREA_ORDER = ["Plan", "Legal", "Weather", "Route", "Fuel", "Pilot", "Aircraft", "Environment", "Pressure"];
 function li(i) {
   return `<li class="item ${i.level}"><span class="tag">${esc(i.area)}</span><span class="t">${esc(i.text)}${i.pts ? ` <span class="pts">+${i.pts}</span>` : ""}</span>${i.ref ? `<span class="r">${esc(i.ref)}</span>` : "<span></span>"}</li>`;
@@ -916,6 +1038,12 @@ function render({ items, ctx }) {
   else if (score >= 12) { cls = "stop"; word = "NO-GO"; why = `Risk score ${score}: too many factors stacked together.`; }
   else if (cautions.length) { cls = "caution"; word = "CAUTION"; why = `Go only with a plan for each caution (score ${score}).`; }
   else { cls = "go"; word = "GO"; why = "Within legal limits and your personal minimums."; }
+  if (ctx.outlook) { // beyond the TAFs: an outlook, never a go/no-go
+    const o = ctx.outlook, bad = stops.length || score >= 12;
+    cls = `outlook ${bad ? "o-bad" : cautions.length ? "o-marginal" : "o-good"}`;
+    word = bad ? "LOOKS BAD" : cautions.length ? "MARGINAL" : "LOOKS GOOD";
+    why = `Outlook, ${o.lead} h ahead: forecast guidance${o.cycle ? ` (NBM ${o.cycle.slice(11, 13)}Z${o.source === "IEM" ? " via IEM" : ""})` : ""}, not TAFs. TAFs should cover your arrival from about ${fmtLocal(o.tafFrom)}; re-check then for the go/no-go.`;
+  }
   if (W.loading && !W.loadedAt) { cls = ""; word = "—"; why = "Loading route and weather…"; }
 
   const v = $("#verdict");
@@ -923,6 +1051,7 @@ function render({ items, ctx }) {
   v.querySelector(".word").textContent = word;
   v.querySelector(".why").textContent = why;
   $("#pin").style.left = Math.min(score, 20) / 20 * 100 + "%";
+  $("#stops-h").textContent = ctx.outlook ? "Likely no-go factors" : "Hard stops";
   $("#stops").innerHTML = stops.map(li).join("") || `<li class="item ok"><span class="tag">All</span><span class="t">No hard stops.</span><span></span></li>`;
   $("#cautions").innerHTML = cautions.map(li).join("") || `<li class="item ok"><span class="tag">All</span><span class="t">No cautions.</span><span></span></li>`;
   $("#oks").innerHTML = oks.map(li).join("");
@@ -981,6 +1110,7 @@ function render({ items, ctx }) {
 
   // weather cards
   $("#wx-cards").innerHTML = ctx.cards.map(c => {
+    if (c.o) return outlookCard(c);
     const m = c.a?.metar, mc = metarSum(m);
     const catNow = m?.fltCat || (mc ? category(mc.cig, mc.vis) : "NA");
     const cond = c.w?.cond;
@@ -1573,6 +1703,81 @@ function fieldsToEtd() {
   $("#etd").value = d && t ? `${d}T${t}` : "";
 }
 
+// ---------- outlook: forecast guidance beyond the TAFs ----------
+// A time window that starts more than OUTLOOK_AFTER_H hours ahead and isn't covered by a TAF is judged
+// from the National Blend of Models: NBS (3-hourly, to 72 h) has ceiling, visibility and IFR chances;
+// NBE (12-hourly, to 192 h) only thunder, precipitation and wind.
+const OUTLOOK_AFTER_H = 20;
+const nbmId = pt => (pt?.icao || pt?.ident || "").toUpperCase();
+const nbmCig = v => (v == null ? null : v === -88 ? Infinity : v * 100);
+const nbmVis = v => (v == null ? null : v >= 100 ? 10 : v / 10);
+const leadH = t => (+t - Date.now()) / 3600e3;
+// worst guidance around [from, to] (the 3-hourly steps either side count)
+function nbmWindow(st, from, to) {
+  const near = pad => (st?.rows || []).filter(r => { const t = Date.parse(r.t); return t >= +from - pad && t <= +to + pad; });
+  const rows = near(1.5 * 3600e3);
+  if (!rows.length) return null;
+  const sum = blankSum();
+  let ifc = 0, ifv = 0, ts = 0, pzr = 0;
+  for (const r of rows) {
+    const c = nbmCig(r.CIG), v = nbmVis(r.VIS);
+    if (c != null && c !== Infinity) sum.cig = sum.cig == null ? c : Math.min(sum.cig, c);
+    if (v != null) sum.vis = sum.vis == null ? v : Math.min(sum.vis, v);
+    if (r.WSP != null) { sum.wspd = Math.max(sum.wspd, r.WSP); sum.winds.push({ dir: r.WDR, spd: Math.max(r.WSP, r.GST || 0) }); }
+    if (r.GST != null) sum.gust = Math.max(sum.gust, r.GST);
+    ifc = Math.max(ifc, r.IFC ?? 0); ifv = Math.max(ifv, r.IFV ?? 0); ts = Math.max(ts, r.T03 ?? 0); pzr = Math.max(pzr, r.PZR ?? 0);
+    sum.rows++;
+  }
+  const pop = Math.max(0, ...near(3 * 3600e3).map(r => r.P06 ?? 0)); // 6-hour PoP sits on every other step
+  return { kind: "nbs", prev: sum, cond: blankSum(), covered: true, ifc, ifv, ts, pzr, pop };
+}
+function nbeWindow(st, from, to) {
+  const rows = (st?.rows || []).filter(r => { const t = Date.parse(r.t); return t >= +from - 6 * 3600e3 && t <= +to + 6 * 3600e3; });
+  if (!rows.length) return null;
+  const sum = blankSum();
+  for (const r of rows) {
+    if (r.WSP != null) { sum.wspd = Math.max(sum.wspd, r.WSP); sum.winds.push({ dir: r.WDR, spd: Math.max(r.WSP, r.GST || 0) }); }
+    if (r.GST != null) sum.gust = Math.max(sum.gust, r.GST);
+    sum.rows++;
+  }
+  return { kind: "nbe", prev: sum, cond: blankSum(), covered: true, ts: Math.max(0, ...rows.map(r => r.T12 ?? 0)), pop: Math.max(0, ...rows.map(r => r.P12 ?? 0)), pzr: Math.max(0, ...rows.map(r => r.PZR ?? 0)) };
+}
+// guidance for one airport and window, or null when its TAF covers it (or it's close enough to wait for one)
+function outlookFor(pt, rec, win) {
+  if (!pt || leadH(win[0]) <= OUTLOOK_AFTER_H) return null;
+  if (rec?.taf && tafWindow(rec.taf, ...win).covered) return null;
+  const id = nbmId(pt);
+  const o = nbmWindow(W.nbm?.nbs?.stations?.[id], ...win) || nbeWindow(W.nbm?.nbe?.stations?.[id], ...win);
+  if (o) return { ...o, id, cycle: (o.kind === "nbs" ? W.nbm.nbs : W.nbm.nbe).cycle, source: (o.kind === "nbs" ? W.nbm.nbs : W.nbm.nbe).source };
+  const why = W.nbmError ? `guidance couldn't be loaded (${W.nbmError})` : leadH(win[0]) > 190 ? "it's beyond any forecast guidance (8 days)" : `there's no NBM guidance for ${id}`;
+  return { kind: "none", id, why, prev: blankSum(), cond: blankSum(), covered: false };
+}
+// when the first TAF covering `t` (+1 h) should be out: issued every 6 h, valid 24 h (30 h at some large airports)
+function tafCoverFrom(t) {
+  const six = 6 * 3600e3;
+  return new Date(Math.ceil((+t + 3600e3 - 24 * 3600e3) / six) * six - 40 * 60e3);
+}
+
+// SPC day 1-3 categorical outlooks along the route
+const SPC_RANK = { TSTM: 1, MRGL: 2, SLGT: 3, ENH: 4, MDT: 5, HIGH: 6 };
+const SPC_NAME = { TSTM: "general thunderstorms", MRGL: "marginal severe risk", SLGT: "slight severe risk", ENH: "enhanced severe risk", MDT: "moderate severe risk", HIGH: "high severe risk" };
+const spcTime = s => Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12));
+function spcOnRoute(routePts, times) {
+  let best = null;
+  for (const d of W.spc || []) for (const ft_ of d.features || []) {
+    if (!SPC_RANK[ft_.label] || !ft_.geometry) continue;
+    const from = spcTime(ft_.valid), to = spcTime(ft_.expire);
+    if (!times.some(t => +t >= from && +t < to)) continue;
+    const polys = ft_.geometry.type === "Polygon" ? [ft_.geometry.coordinates] : ft_.geometry.type === "MultiPolygon" ? ft_.geometry.coordinates : [];
+    for (const poly of polys) {
+      const ring = (poly[0] || []).map(([lon, lat]) => ({ lat, lon }));
+      if (ring.length < 3 || routeDistance(routePts, ring) > 10) continue;
+      if (!best || SPC_RANK[ft_.label] > SPC_RANK[best.label]) best = { label: ft_.label, day: d.day };
+    }
+  }
+  return best;
+}
+
 // ---------- alternate candidates ----------
 const ALT_RADIUS = 100; // nm from the destination
 const MIL_RE = /\b(Naval|NAS|NOLF|Air Force|AFB|Army|AAF|Air National Guard|ANGB|Marine Corps|MCAS|Joint Base|JRB|Coast Guard)\b/i;
@@ -1590,18 +1795,27 @@ async function fetchAltCands(code) {
   } catch { return []; }
 }
 // status of each candidate at its own ETA (destination ETA + missed approach + ~140 kt to get there)
-function rateAltCands(cands, eta) {
+function rateAltCands(cands, eta, nbs = W.nbm?.nbs) {
   return (cands || []).map(a => {
     const req = a.ils ? [600, 2] : [800, 2];
     const t = +eta + (MISSED_MIN + a.dist / 140 * 60) * 60e3;
-    let status = "notaf", fc = "";
-    if (a.taf) {
+    let status = "notaf", fc = "", src = "taf";
+    const tafOk = a.taf && tafWindow(a.taf, t - 3600e3, t + 3600e3).covered;
+    if (!tafOk && leadH(t) > OUTLOOK_AFTER_H) { // beyond the TAFs: NBM guidance
+      src = "nbm";
+      const o = nbmWindow(nbs?.stations?.[a.id], t - 3600e3, t + 3600e3);
+      if (o) {
+        const pc = o.prev.cig ?? Infinity, pv = o.prev.vis ?? 10;
+        fc = `NBM ${pc === Infinity ? "no ceiling" : ft(pc)} / ${fmtVis(pv)}`;
+        status = pc < req[0] || pv < req[1] ? "below" : o.ifc >= 50 || o.ts >= 50 ? "marginal" : "ok";
+      }
+    } else if (a.taf) {
       const w = tafWindow(a.taf, t - 3600e3, t + 3600e3);
       const pc = w.prev.cig ?? Infinity, pv = w.prev.vis ?? 99, cc = w.cond.cig ?? Infinity, cv = w.cond.vis ?? 99;
       fc = `${pc === Infinity ? "no ceiling" : ft(pc)} / ${fmtVis(pv)}`;
       status = pc < req[0] || pv < req[1] ? "below" : (w.cond.rows && (cc < req[0] || cv < req[1])) || !w.covered ? "marginal" : "ok";
     }
-    return { ...a, req, status, fc };
+    return { ...a, req, status, fc, src };
   });
 }
 // nearest civil field that meets alternate minimums, else the nearest civil one with only TEMPO/PROB worries
@@ -1619,14 +1833,18 @@ function renderAltPicker(ctx) {
   else if (!cands.length) html = `<option value="">No airport with an approach within ${ALT_RADIUS} nm</option>`;
   else {
     const rated = rateAltCands(cands, ctx.times?.eta || new Date());
-    const groups = [
+    const guided = rated.some(a => a.src === "nbm");
+    const groups = guided ? [
+      ["ok", "Likely meets alternate minimums (NBM guidance)"], ["marginal", "Likely meets them, but a high chance of IFR or storms"],
+      ["below", "Likely below alternate minimums"], ["notaf", leadH(ctx.times?.eta || Date.now()) > 72 ? "No ceiling or visibility guidance past 72 h" : "No NBM guidance for the field"], ["mil", "Military (PPR, usually not available)"],
+    ] : [
       ["ok", "Meets alternate minimums"], ["marginal", "TEMPO/PROB below minimums, or TAF doesn't cover ETA"],
       ["below", "Forecast below alternate minimums"], ["notaf", "No TAF on the field (can't qualify)"], ["mil", "Military (PPR, usually not available)"],
     ];
     const opt = a => {
       const name = a.name.length > 30 ? a.name.slice(0, 29) + "…" : a.name;
       const mins = `${a.req[0]}-${a.req[1]}`;
-      const wxTxt = a.status === "notaf" ? "no TAF" : a.status === "ok" ? `${a.fc} ✓ ${mins}` : a.status === "marginal" ? `${a.fc} ~ ${mins}` : `${a.fc} ✗ ${mins}`;
+      const wxTxt = a.status === "notaf" ? (a.src === "nbm" ? "no guidance" : "no TAF") : a.status === "ok" ? `${a.fc} ✓ ${mins}` : a.status === "marginal" ? `${a.fc} ~ ${mins}` : `${a.fc} ✗ ${mins}`;
       return `<option value="${esc(a.id)}">${esc(a.id)} · ${Math.round(a.dist)} nm · ${esc(name)} · ${a.ils ? "ILS" : "non-ILS"} · ${esc(wxTxt)}</option>`;
     };
     html = `<option value="">Pick from ${cands.length} within ${ALT_RADIUS} nm of ${esc(W.dest.token)}…</option>` + groups.map(([k, label]) => {
@@ -1658,7 +1876,9 @@ async function reverseCourse() {
   btn.disabled = true;
   hint.textContent = `Finding an alternate near ${newDest}…`;
   const eta = new Date(+new Date($("#etd").value || Date.now()) + (lastCtx?.sim?.minutes || 90) * 60e3);
-  const best = bestAlternate(rateAltCands(await fetchAltCands(newDest), eta));
+  const cands = await fetchAltCands(newDest);
+  const nbs = leadH(eta) > OUTLOOK_AFTER_H && leadH(eta) < 74 ? await getJSON("/nbm", { prod: "nbs", ids: cands.map(a => a.id).join(",") }).catch(() => null) : null;
+  const best = bestAlternate(rateAltCands(cands, eta, nbs));
   btn.disabled = false;
   $("#alt").value = best ? best.id : "";
   hint.textContent = best

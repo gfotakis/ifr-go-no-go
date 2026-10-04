@@ -28,6 +28,8 @@
   --cape1: #e0b400;
   --cape2: #e07a1f;
   --cape3: #c8392f;
+  --outlook: #6a4fc2;
+  --outlook-bg: #f3f0fb;
   --li1: #9fb4e8;
   --li2: #7b5cd6;
   --li3: #6a1fa0;
@@ -42,6 +44,7 @@
     --line: #2a3843; --accent: #6fb0e0; --go: #5cc58a; --caution: #f0b04f; --stop: #f07a70;
     --go-bg: #15301f; --caution-bg: #33270f; --stop-bg: #3a1a18;
     --cloud: #c3cdd5; --fzl: #6fb3f2; --cape1: #e8c547; --cape2: #f0974a; --cape3: #f06b5f;
+    --outlook: #a58cf0; --outlook-bg: #1c1a2c;
     --li1: #7f95d6; --li2: #9b78f0; --li3: #c45ce8;
     color-scheme: dark;
   }
@@ -95,6 +98,16 @@ dialog#terms button:disabled { opacity: 0.45; cursor: not-allowed; }
 .verdict.go { border-color: var(--go); } .verdict.go .word { color: var(--go); }
 .verdict.caution { border-color: var(--caution); } .verdict.caution .word { color: var(--caution); }
 .verdict.stop { border-color: var(--stop); } .verdict.stop .word { color: var(--stop); }
+.verdict.outlook { border-color: var(--outlook); border-style: dashed; background: var(--outlook-bg); }
+.verdict.outlook .word { font-size: 2.4rem; }
+.verdict.o-good .word { color: var(--go); } .verdict.o-marginal .word { color: var(--caution); } .verdict.o-bad .word { color: var(--stop); }
+.verdict.outlook > .lbl:first-child::after { content: " · outlook"; color: var(--outlook); }
+.outlook-wx { border-style: dashed; border-color: var(--outlook); }
+.cat.OUT { background: var(--outlook); color: #fff; }
+.ifr-strip { display: flex; gap: 2px; margin-top: 2px; }
+.ifr-cell { flex: 1; min-width: 0; text-align: center; border-radius: 4px; padding: 2px 0; font: 600 0.7rem var(--f-data); background: color-mix(in srgb, var(--stop) calc(var(--p) * 1%), var(--inset)); border: 1px solid transparent; }
+.ifr-cell.now { border-color: var(--ink); }
+.ifr-cell b { display: block; font-weight: 600; } .ifr-cell i { display: block; font-style: normal; font-size: 0.6rem; color: var(--muted); }
 .verdict .why { margin-top: 6px; font-weight: 600; }
 .meter { margin-top: 14px; }
 .meter-track { position: relative; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--go) 0 25%, var(--caution) 25% 60%, var(--stop) 60% 100%); opacity: 0.85; }
@@ -505,7 +518,7 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
           <div class="meter-scale"><span>0</span><span>5</span><span>12</span><span>20+</span></div>
         </div>
       </div>
-      <section class="card"><h2>Hard stops</h2><ul class="items" id="stops"></ul></section>
+      <section class="card"><h2 id="stops-h">Hard stops</h2><ul class="items" id="stops"></ul></section>
       <section class="card"><h2>Cautions <small>Points add to the risk score</small></h2><ul class="items" id="cautions"></ul></section>
       <section class="card"><details><summary id="ok-sum">Checks passed</summary><ul class="items" id="oks"></ul></details></section>
       <p class="disclaimer">This is a decision aid, not a briefing. As pilot in command you must get all available information for the flight (§91.103), including an official briefing, NOTAMs and TFRs, and the decision is yours. Times, winds and fuel are model estimates; check the performance figures against your POH. Hard stops are regulatory limits or your own personal minimums. Score: 0–4 GO, 5–11 CAUTION, 12+ NO-GO.</p>

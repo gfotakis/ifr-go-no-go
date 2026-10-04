@@ -242,8 +242,177 @@ class Approaches:
         return {"cycle": self.cycle, "charts": charts}
 
 
+class NbmText:
+    """National Blend of Models station bulletins, for flights beyond the TAFs.
+
+    NBS: every 3 h, 6-72 h ahead (ceiling, visibility, IFR chances, thunder, wind).
+    NBE: every 12 h, 24-192 h ahead (thunder, precipitation, wind; no ceiling or visibility).
+    The whole-country file comes from NOMADS once per cycle and is cached on disk; the
+    Iowa Environmental Mesonet's per-station JSON is the backup.
+    """
+
+    NOMADS = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/"
+    IEM = "https://mesonet.agron.iastate.edu/api/1/mos.json"
+    NAMES = {"nbs": "nbstx", "nbe": "nbetx"}
+    HEADER = re.compile(r"^ (\S+)\s+NBM V[\d.]+ NB[SE] GUIDANCE\s+(\d\d)/(\d\d)/(\d{4})\s+(\d\d)00 UTC")
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.state = {prod: {"cycle": None, "path": None, "index": {}, "checked": 0.0} for prod in self.NAMES}
+
+    def url(self, prod, cycle):
+        return f"{self.NOMADS}blend.{cycle:%Y%m%d}/{cycle:%H}/text/blend_{self.NAMES[prod]}.t{cycle:%H}z"
+
+    def refresh(self, prod):
+        """Make sure a recent bulletin is on disk and indexed; look for a newer one at most hourly."""
+        st = self.state[prod]
+        if st["cycle"] and time.time() - st["checked"] < 3600:
+            return st
+        st["checked"] = time.time()
+        now = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
+        if st["cycle"] and now - st["cycle"] < dt.timedelta(hours=3):
+            return st  # a 30 MB download every few hours is plenty
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        for back in range(0, 9):
+            cycle = now - dt.timedelta(hours=back)
+            if st["cycle"] and cycle <= st["cycle"]:
+                break
+            path = os.path.join(CACHE_DIR, f"{prod}-{cycle:%Y%m%d%H}.txt")
+            if not os.path.exists(path):
+                try:
+                    req = urllib.request.Request(self.url(prod, cycle), headers=UA, method="HEAD")
+                    urllib.request.urlopen(req, timeout=15).close()
+                except Exception:
+                    continue  # not published yet
+                data = fetch(self.url(prod, cycle), timeout=180)
+                with open(path + ".tmp", "wb") as fh:
+                    fh.write(data)
+                os.replace(path + ".tmp", path)
+            st.update(cycle=cycle, path=path, index=self.build_index(path))
+            for old in os.listdir(CACHE_DIR):  # keep only the cycle in use
+                if old.startswith(prod + "-") and os.path.join(CACHE_DIR, old) != path:
+                    try:
+                        os.remove(os.path.join(CACHE_DIR, old))
+                    except OSError:
+                        pass
+            break
+        if not st["cycle"]:
+            raise RuntimeError(f"no {prod.upper()} bulletin found on NOMADS")
+        return st
+
+    def build_index(self, path):
+        index, pos = {}, 0
+        with open(path, "rb") as fh:
+            for line in fh:
+                if b"NBM V" in line and b"GUIDANCE" in line:
+                    m = self.HEADER.match(line.decode("ascii", "replace"))
+                    if m:
+                        index[m.group(1)] = pos
+                pos += len(line)
+        return index
+
+    def parse_block(self, lines):
+        m = self.HEADER.match(lines[0])
+        run = dt.datetime(int(m.group(4)), int(m.group(2)), int(m.group(3)), int(m.group(5)), tzinfo=dt.timezone.utc)
+        fhr = next(l for l in lines if l.startswith(" FHR"))
+        spans = [(mm.start(), mm.end(), int(mm.group())) for mm in re.finditer(r"\d+", fhr[5:])]
+        rows = [{"t": (run + dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%MZ")} for _, _, h in spans]
+        for line in lines:
+            code = line[1:4]
+            if not re.fullmatch(r"[A-Z][A-Z0-9]{2}", code) or code in ("FHR", "UTC"):
+                continue
+            body, prev = line[5:], 0
+            for i, (_, end, _) in enumerate(spans):
+                cell = body[prev:end].replace("|", "").strip()
+                prev = end
+                if re.fullmatch(r"-?\d+", cell):
+                    rows[i][code] = int(cell) * (10 if code in ("WDR", "TWD") else 1)  # the text gives directions in tens of degrees
+        return {"run": run.strftime("%Y-%m-%dT%H:%MZ"), "rows": rows}
+
+    def from_nomads(self, prod, ids):
+        with self.lock:
+            st = self.refresh(prod)
+        out = {}
+        with open(st["path"], encoding="ascii", errors="replace") as fh:
+            for want, sid in ids.items():
+                if sid not in st["index"]:
+                    continue
+                fh.seek(st["index"][sid])
+                lines = []
+                for line in fh:
+                    if not line.strip():
+                        break
+                    lines.append(line.rstrip("\n"))
+                out[want] = self.parse_block(lines)
+        return {"source": "NOMADS", "cycle": st["cycle"].strftime("%Y-%m-%dT%H:%MZ"), "stations": out}
+
+    def from_iem(self, prod, ids):
+        out, cycle = {}, None
+        for want, sid in ids.items():
+            try:
+                data = json.loads(fetch(f"{self.IEM}?station={urllib.parse.quote(sid)}&model={prod.upper()}", 20))
+            except Exception:
+                continue
+            recs = data.get("data") or []
+            if not recs:
+                continue
+            run = max(r["runtime_utc"] for r in recs if r.get("runtime_utc"))
+            rows = []
+            for r in recs:
+                if r.get("runtime_utc") != run:
+                    continue
+                row = {"t": r["ftime_utc"].replace(" ", "T")[:16] + "Z"}
+                for k, v in r.items():
+                    if len(k) == 3 and isinstance(v, (int, float)) and not isinstance(v, bool):
+                        row[k.upper()] = int(v)
+                rows.append(row)
+            out[want] = {"run": run.replace(" ", "T")[:16] + "Z", "rows": sorted(rows, key=lambda x: x["t"])}
+            cycle = out[want]["run"]
+        return {"source": "IEM", "cycle": cycle, "stations": out}
+
+    def lookup(self, prod, wanted):
+        prod = prod if prod in self.NAMES else "nbs"
+        ids = {}
+        for w in wanted:
+            w = w.upper()
+            cands = [w] + (["K" + w] if len(w) == 3 else []) + ([w[1:]] if len(w) == 4 and w[0] == "K" else [])
+            ids[w] = cands
+        try:
+            st_index = None
+            with self.lock:
+                st_index = self.refresh(prod)["index"]
+            pick = {w: next((c for c in cands if c in st_index), cands[0]) for w, cands in ids.items()}
+            res = self.from_nomads(prod, pick)
+        except Exception as err:
+            print(f"warning: NBM from NOMADS failed ({err}); using IEM")
+            res = self.from_iem(prod, {w: (cands[1] if len(cands) > 1 and len(w) == 3 else cands[0]) for w, cands in ids.items()})
+        res["prod"] = prod
+        res["missing"] = [w for w in ids if w not in res["stations"]]
+        return res
+
+
+class SpcOutlook:
+    """SPC day 1-3 categorical convective outlooks (GeoJSON), cached for 30 minutes."""
+
+    def __init__(self):
+        self.cache = {}
+
+    def day(self, n):
+        n = max(1, min(3, int(n)))
+        hit = self.cache.get(n)
+        if hit and time.time() - hit[0] < 1800:
+            return hit[1]
+        data = json.loads(fetch(f"https://www.spc.noaa.gov/products/outlook/day{n}otlk_cat.lyr.geojson", 20))
+        feats = [{"label": f["properties"].get("LABEL"), "valid": f["properties"].get("VALID"), "expire": f["properties"].get("EXPIRE"),
+                  "geometry": f.get("geometry")} for f in data.get("features", [])]
+        self.cache[n] = (time.time(), {"day": n, "features": feats})
+        return self.cache[n][1]
+
+
 NAV = NavData()
 APPR = Approaches()
+NBM = NbmText()
+SPC = SpcOutlook()
 
 
 def alternates(code, radius):
@@ -294,6 +463,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json(APPR.lookup(q.get("apt", "")))
             if url.path == "/nav/alternates":
                 return self.json(alternates(q.get("apt", ""), min(200.0, float(q.get("radius", 100)))))
+            if url.path == "/nbm":
+                return self.json(NBM.lookup(q.get("prod", "nbs"), [i for i in q.get("ids", "").split(",") if i][:80]))
+            if url.path == "/spc":
+                return self.json(SPC.day(q.get("day", "1")))
             if url.path == "/nav/status":
                 return self.json({"nav": NAV.ready, "cycle": APPR.cycle})
         except Exception as err:
