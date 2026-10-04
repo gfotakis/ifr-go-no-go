@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IFR Go/No-Go</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: plan form on the left, sticky verdict panel on the right; verdict moves to the top on phones */
+:root {
+  --bg: #eef1f4;
+  --panel: #ffffff;
+  --inset: #f5f7f9;
+  --ink: #142029;
+  --muted: #5a6872;
+  --line: #d6dde3;
+  --accent: #1f5f8b;
+  --go: #1d7a46;
+  --caution: #a8650c;
+  --stop: #b8322a;
+  --go-bg: #e3f3ea;
+  --caution-bg: #fbf0dc;
+  --stop-bg: #fae4e2;
+  --cloud: #7d8e9b;
+  --fzl: #2f7fd0;
+  --cape1: #e0b400;
+  --cape2: #e07a1f;
+  --cape3: #c8392f;
+  --li1: #9fb4e8;
+  --li2: #7b5cd6;
+  --li3: #6a1fa0;
+  --f-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --f-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d151b; --panel: #151f27; --inset: #1b2731; --ink: #e2e9ee; --muted: #93a3ae;
+    --line: #2a3843; --accent: #6fb0e0; --go: #5cc58a; --caution: #f0b04f; --stop: #f07a70;
+    --go-bg: #15301f; --caution-bg: #33270f; --stop-bg: #3a1a18;
+    --cloud: #c3cdd5; --fzl: #6fb3f2; --cape1: #e8c547; --cape2: #f0974a; --cape3: #f06b5f;
+    --li1: #7f95d6; --li2: #9b78f0; --li3: #c45ce8;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--f-body); padding: 24px 16px 48px; }
+.wrap { max-width: 1240px; margin: 0 auto; }
+header.top { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; justify-content: space-between; margin-bottom: 18px; }
+h1 { font: 700 2rem/1 var(--f-display); letter-spacing: 0.02em; margin: 0; text-transform: uppercase; }
+h1 span { color: var(--accent); }
+h1 .ver { font: 600 0.8rem var(--f-data); color: var(--muted); letter-spacing: 0; text-transform: none; vertical-align: middle; }
+.sub { color: var(--muted); font-size: 0.9rem; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 20px; align-items: start; }
+.verdict-col { position: sticky; top: 16px; display: grid; gap: 14px; }
+
+fieldset, .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px 18px; margin: 0; min-width: 0; }
+.stack { display: grid; gap: 16px; }
+legend, .card h2 { font: 700 1.05rem var(--f-display); text-transform: uppercase; letter-spacing: 0.08em; padding: 0 6px; margin: 0; }
+.card h2 { padding: 0; margin-bottom: 10px; }
+legend small, .card h2 small { font: 400 0.82rem var(--f-body); text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: 6px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px 14px; margin-top: 8px; }
+.grid.wide { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.f { display: grid; gap: 3px; min-width: 0; }
+.f label, .lbl { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+.f .hint { font-size: 0.76rem; color: var(--muted); }
+input, select { font: inherit; color: var(--ink); background: var(--inset); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; width: 100%; min-width: 0; }
+input.icao { font-family: var(--f-data); text-transform: uppercase; font-weight: 600; }
+input[type="number"] { font-family: var(--f-data); font-variant-numeric: tabular-nums; }
+input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.chk { display: inline-flex; align-items: center; gap: 7px; background: var(--inset); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px 5px 9px; cursor: pointer; font-size: 0.9rem; user-select: none; }
+.chk input { width: auto; margin: 0; accent-color: var(--accent); }
+.chk.bad:has(input:checked) { border-color: var(--stop); background: var(--stop-bg); }
+.chk.good:has(input:checked) { border-color: var(--go); background: var(--go-bg); }
+.sec-title { font: 600 0.8rem var(--f-display); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); margin: 16px 0 0; }
+button { font: 600 0.9rem var(--f-body); color: var(--panel); background: var(--accent); border: 0; border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+button.ghost { color: var(--accent); background: transparent; border: 1px solid var(--line); }
+.example { display: inline-block; font: 600 0.68rem var(--f-data); color: var(--caution); background: var(--caution-bg); border-radius: 4px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px; letter-spacing: 0.04em; text-transform: uppercase; }
+.banner { background: var(--caution-bg); border: 1px solid var(--caution); border-radius: 10px; padding: 10px 14px; font-size: 0.9rem; }
+dialog#terms { max-width: 580px; width: calc(100% - 32px); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; }
+dialog#terms::backdrop { background: rgba(0, 0, 0, 0.6); }
+dialog#terms h2 { font: 700 1.3rem var(--f-display); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 10px; }
+dialog#terms ul { padding-left: 1.2em; margin: 8px 0; }
+dialog#terms li { margin: 4px 0; }
+dialog#terms button:disabled { opacity: 0.45; cursor: not-allowed; }
+.banner.err { background: var(--stop-bg); border-color: var(--stop); }
+
+/* Verdict */
+.verdict { border-radius: 12px; padding: 18px 20px; border: 2px solid var(--line); background: var(--panel); }
+.verdict .word { font: 700 3.2rem/0.95 var(--f-display); letter-spacing: 0.03em; }
+.verdict.go { border-color: var(--go); } .verdict.go .word { color: var(--go); }
+.verdict.caution { border-color: var(--caution); } .verdict.caution .word { color: var(--caution); }
+.verdict.stop { border-color: var(--stop); } .verdict.stop .word { color: var(--stop); }
+.verdict .why { margin-top: 6px; font-weight: 600; }
+.meter { margin-top: 14px; }
+.meter-track { position: relative; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--go) 0 25%, var(--caution) 25% 60%, var(--stop) 60% 100%); opacity: 0.85; }
+.meter-pin { position: absolute; top: -5px; width: 4px; height: 20px; border-radius: 2px; background: var(--ink); transform: translateX(-50%); }
+.meter-scale { display: flex; justify-content: space-between; font: 0.72rem var(--f-data); color: var(--muted); margin-top: 4px; }
+.items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.item { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding: 9px 11px; border-radius: 8px; background: var(--inset); border-left: 4px solid var(--line); }
+.item.stop { border-left-color: var(--stop); background: var(--stop-bg); }
+.item.caution { border-left-color: var(--caution); background: var(--caution-bg); }
+.item.ok { border-left-color: var(--go); }
+.item.info { border-left-color: var(--accent); }
+.tag { grid-row: span 2; font: 600 0.68rem var(--f-data); text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding-top: 3px; width: 4.6rem; }
+.item .t { font-size: 0.92rem; }
+.item .r { font: 0.74rem var(--f-data); color: var(--muted); }
+.item .pts { font-family: var(--f-data); font-weight: 600; color: var(--caution); }
+details summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+details[open] summary { margin-bottom: 10px; }
+.disclaimer { font-size: 0.8rem; color: var(--muted); }
+
+/* Weather cards */
+.wx-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.wx { background: var(--inset); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; display: grid; gap: 8px; align-content: start; }
+.wx-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.wx-head b { font: 700 1.25rem var(--f-display); letter-spacing: 0.04em; }
+.wx-head .role { font: 600 0.7rem var(--f-data); color: var(--muted); text-transform: uppercase; }
+.cat { font: 600 0.72rem var(--f-data); padding: 1px 7px; border-radius: 4px; color: #fff; }
+.cat.VFR { background: #2e8b57; } .cat.MVFR { background: #2d6fc4; } .cat.IFR { background: #c8392f; } .cat.LIFR { background: #a3329e; } .cat.NA { background: var(--muted); }
+.wx .name { font-size: 0.8rem; color: var(--muted); margin-top: -6px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 0.85rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--f-data); font-variant-numeric: tabular-nums; }
+.raw { font: 0.75rem/1.45 var(--f-data); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.hz { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; font-size: 0.88rem; }
+.hz li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 10px; }
+.hz .k { font: 600 0.72rem var(--f-data); text-transform: uppercase; padding-top: 2px; }
+.hz .k.stop { color: var(--stop); } .hz .k.caution { color: var(--caution); } .hz .k.ok { color: var(--go); } .hz .k.info { color: var(--accent); }
+.loading { opacity: 0.6; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .verdict-col { position: static; order: -1; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Route, legs and performance tables */
+.route-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; margin-top: 8px; }
+input#route { font: 600 1.05rem var(--f-data); text-transform: uppercase; letter-spacing: 0.03em; padding: 9px 11px; }
+.route-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
+.route-meta b { color: var(--ink); font-family: var(--f-data); }
+.route-in { display: flex; gap: 8px; align-items: stretch; }
+.route-in input { flex: 1; min-width: 0; }
+.route-in button { white-space: nowrap; }
+.alt-in { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: 6px; }
+.alt-in select { font-family: var(--f-data); font-size: 0.85rem; }
+@media (min-width: 700px) { .alt-f { grid-column: span 2; } }
+.etd-in { display: grid; grid-template-columns: minmax(0, 1fr) 4.6em; gap: 6px; }
+@media (min-width: 700px) { .etd-f { grid-column: span 2; } .etd-in { max-width: 300px; } }
+input.time24 { font-family: var(--f-data); text-align: center; }
+input.time24.bad { border-color: var(--stop); outline-color: var(--stop); }
+.route-err { color: var(--stop); font-size: 0.85rem; margin-top: 4px; }
+.tbl-wrap { overflow-x: auto; margin-top: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+th { font: 600 0.72rem var(--f-body); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+th:first-child, td:first-child { text-align: left; }
+td { font-family: var(--f-data); }
+tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line); }
+.head { color: var(--stop); } .tail { color: var(--go); }
+.perf input { width: 5.2rem; padding: 4px 6px; text-align: right; }
+.perf td { padding: 4px 6px; }
+.est { font: 600 0.62rem var(--f-data); color: var(--caution); margin-left: 3px; vertical-align: 1px; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 4px; }
+.stat { background: var(--panel); padding: 10px 12px; }
+.stat .v { font: 600 1.25rem var(--f-data); font-variant-numeric: tabular-nums; }
+.stat .s { font-size: 0.78rem; color: var(--muted); }
+.plate { font-size: 0.82rem; color: var(--accent); }
+@media (max-width: 560px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+#map { height: 500px; border-radius: 10px; border: 1px solid var(--line); background: var(--inset); z-index: 0; }
+.leaflet-container { font: 13px var(--f-body); }
+.map-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
+.map-legend b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+.leaflet-control-layers { background: var(--panel); color: var(--ink); border: 1px solid var(--line) !important; }
+.leaflet-control-layers label { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.leaflet-control-layers input { width: auto; padding: 0; margin: 0; }
+.leaflet-popup-content { font-size: 12px; }
+@media (prefers-color-scheme: dark) { #map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); } }
+.map-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
+.wx-label { font: 600 11px var(--f-data); color: #111; background: rgba(255,255,255,0.85); border: 0; border-radius: 3px; padding: 0 3px; box-shadow: none; white-space: nowrap; }
+.wx-label::before { display: none; }
+.grid-label { font: 600 10px var(--f-data); text-align: center; text-shadow: 0 0 3px var(--panel), 0 0 3px var(--panel); white-space: nowrap; }
+.pirep-ico { font: 700 13px var(--f-data); text-align: center; line-height: 16px; }
+#profile svg { width: 100%; height: auto; display: block; touch-action: none; user-select: none; }
+#profile.pz-on svg { cursor: grab; }
+#profile.pz-drag svg { cursor: grabbing; }
+.pz-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 8px; }
+.pz-grp { display: inline-flex; align-items: center; gap: 4px; }
+.pz-l { font-size: 0.82rem; color: var(--muted); margin-right: 2px; }
+.pz-tools button { padding: 3px 10px; min-width: 32px; font-size: 0.85rem; }
+.pz-range { font: 0.8rem var(--f-data); color: var(--muted); margin-left: auto; }
+#profile text { font-family: var(--f-data); font-size: 11px; fill: var(--muted); }
+.appr-list { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>IFR <span>Go/No-Go</span> <small class="ver">v1.0</small></h1>
+      <div class="sub">Preflight decision model · FAA Part 91 · weather from aviationweather.gov and Open-Meteo · plates from FAA d-TPP</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span class="sub" id="wx-status">Weather not loaded</span>
+      <button type="button" id="reload">Refresh weather</button>
+      <button type="button" id="quit" class="ghost" title="Stop the IFR Go/No-Go server">Quit app</button>
+    </div>
+  </header>
+
+  <div id="stopped" class="banner" hidden>IFR Go/No-Go has stopped. You can close this tab; start it again with the start file or <code>python3 server.py</code>.</div>
+  <div id="banners" class="stack" style="margin-bottom:16px"></div>
+  <dialog id="terms" aria-labelledby="terms-h">
+    <h2 id="terms-h">Before you use IFR Go/No-Go</h2>
+    <p>This is a free decision aid for instrument pilots flying under FAA Part 91. It is <b>not</b> an official weather briefing, flight plan or approved source of aeronautical information.</p>
+    <ul>
+      <li>As pilot in command you must get all available information for the flight (§91.103), including an official briefing, NOTAMs and TFRs.</li>
+      <li>Weather, winds, cloud, icing and instability come from public forecasts and models that can be wrong, late or missing.</li>
+      <li>Time, fuel and performance are estimates. Check them against your POH.</li>
+      <li>The go/no-go result is only as good as the numbers you enter. The decision is always yours.</li>
+    </ul>
+    <p class="sub">The software is provided as is, without warranty of any kind. The authors accept no liability for its use.</p>
+    <label class="chk good"><input type="checkbox" id="termsOk"> I understand and accept this</label>
+    <div style="text-align:right;margin-top:14px"><button type="button" id="termsAccept" disabled>Continue</button></div>
+  </dialog>
+
+  <div class="layout">
+    <form id="plan" class="stack" autocomplete="off" onsubmit="return false">
+
+      <fieldset>
+        <legend>Flight</legend>
+        <div class="route-row">
+          <label class="lbl" for="route">Route</label>
+          <div class="route-in"><input id="route" value="KAEX PICAN 0R1" spellcheck="false"><button type="button" class="ghost" id="reverse" title="Fly the route the other way: reverses the fixes and swaps the destination and departure approaches">⇄ Reverse</button></div>
+          <span class="f"><span class="hint">Departure, fixes and navaids, destination, separated by spaces. Airways and procedures aren't expanded yet; list their fixes.</span></span>
+          <div class="route-meta" id="route-meta"></div>
+          <div class="route-err" id="route-err"></div>
+        </div>
+        <div class="grid">
+          <div class="f alt-f"><label for="alt">Alternate</label><div class="alt-in"><input id="alt" class="icao" value="KPNS" maxlength="4" aria-label="Alternate airport"><select id="altPick" aria-label="Pick an alternate within 100 nm of the destination"><option value="">Alternates load with the weather</option></select></div><span class="hint" id="alt-hint">Blank if none. The list shows airports with a published approach within 100 nm of the destination, checked against standard alternate minimums at your ETA.</span></div>
+          <div class="f etd-f"><label for="etdDate">Departure time (local, 24 h)</label><div class="etd-in"><input id="etdDate" type="date"><input id="etdTime" class="time24" inputmode="numeric" maxlength="5" placeholder="HH:MM" autocomplete="off" aria-label="Departure time, 24-hour"></div><input id="etd" type="hidden"><span class="hint" id="etd-z"></span></div>
+          <div class="f"><label for="cruise">Cruise altitude (ft MSL)</label><input id="cruise" type="number" step="1000" value="9000"></div>
+          <div class="f"><label for="power">Power setting</label><select id="power"><option value="65">65% (economy)</option><option value="75">75% (performance)</option></select></div>
+          <div class="f"><label for="altCruise">Altitude to alternate (ft)</label><input id="altCruise" type="number" step="1000" value="5000"></div>
+          <div class="f"><label for="mea">Highest MEA (ft MSL)</label><input id="mea" type="number" step="100" value="2000"></div>
+          <div class="f"><label for="fuelGal">Fuel on board (gal)</label><input id="fuelGal" type="number" step="1" min="0" value="72"><span class="hint">Usable fuel at engine start</span></div>
+        </div>
+        <div class="checks">
+          <label class="chk"><input type="checkbox" id="night"> Any part at night</label>
+          <label class="chk"><input type="checkbox" id="inClouds" checked> Expect to be in cloud en route</label>
+          <label class="chk"><input type="checkbox" id="mountains"> Mountainous terrain</label>
+        </div>
+      </fieldset>
+
+      <section class="card">
+        <h2>Route and winds <small id="nav-when"></small></h2>
+        <div class="stats" id="trip-stats"></div>
+        <div class="tbl-wrap"><table id="legs"></table></div>
+        <p class="sub" id="wind-src" style="margin:8px 0 0"></p>
+      </section>
+
+      <section class="card">
+        <h2>Threat map <small id="map-when"></small></h2>
+        <div id="map" role="region" aria-label="Map of the route and weather hazards"></div>
+        <div class="map-legend" id="map-legend"></div>
+        <p class="sub" style="margin:8px 0 0">Use the layer switch at the top right to show CAPE, model cloud bases and tops, SIGMETs, G-AIRMETs, PIREPs and the latest METARs (dot colour is the flight category, the label is the ceiling in hundreds of feet). Model layers are for the middle of the flight; click any shape for details.</p>
+      </section>
+
+      <section class="card">
+        <h2>Vertical profile <small>Model clouds, freezing level, CAPE and lifted index along the route at your passing time</small></h2>
+        <div class="pz-tools" id="pz-tools">
+          <span class="pz-grp"><span class="pz-l">Distance</span><button type="button" class="ghost" data-pz="x-">−</button><button type="button" class="ghost" data-pz="x+">+</button></span>
+          <span class="pz-grp"><span class="pz-l">Altitude</span><button type="button" class="ghost" data-pz="y-">−</button><button type="button" class="ghost" data-pz="y+">+</button></span>
+          <button type="button" class="ghost" data-pz="reset">Reset</button>
+          <span class="pz-range" id="pz-range"></span>
+        </div>
+        <div id="profile"></div>
+        <p class="sub" style="margin:6px 0 0">Drag to pan. Ctrl + scroll (or pinch) zooms distance around the pointer; add Shift to zoom altitude. Double-click resets.</p>
+      </section>
+
+      <fieldset>
+        <legend>Approaches <small>Published approaches for this cycle; enter minimums from the plate</small><span class="example">Example values</span></legend>
+        <p class="sec-title">Destination <span id="dest-name"></span></p>
+        <div class="grid">
+          <div class="f" style="grid-column: 1 / -1"><label for="destChart">Approach</label><select id="destChart"></select><a class="plate" id="dest-plate" target="_blank" rel="noopener"></a></div>
+          <div class="f"><label for="destAppr">Minimums line</label>
+            <select id="destAppr"><option>ILS</option><option>LPV</option><option>LNAV/VNAV</option><option>LNAV</option><option>LOC</option><option>VOR</option><option>Circling</option></select></div>
+          <div class="f"><label for="destMinCig">Height (ft AGL)</label><input id="destMinCig" type="number" step="10" value="250"><span class="hint">HAT/HAA of the DA or MDA</span></div>
+          <div class="f"><label for="destMinVis">Visibility (SM)</label><input id="destMinVis" type="number" step="0.25" value="1"></div>
+        </div>
+        <p class="sec-title">Departure: approach for a return <span id="dep-name"></span></p>
+        <div class="grid">
+          <div class="f" style="grid-column: 1 / -1"><label for="depChart">Approach</label><select id="depChart"></select><a class="plate" id="dep-plate" target="_blank" rel="noopener"></a></div>
+          <div class="f"><label for="depMinCig">Height (ft AGL)</label><input id="depMinCig" type="number" step="10" value="200"></div>
+          <div class="f"><label for="depMinVis">Visibility (SM)</label><input id="depMinVis" type="number" step="0.25" value="0.5"></div>
+        </div>
+        <p class="sec-title">Alternate: minimums for filing (§91.169) <span id="alt-name"></span></p>
+        <div class="grid">
+          <div class="f" style="grid-column: 1 / -1"><label for="altChart">Approach you'd fly there</label><select id="altChart"></select><a class="plate" id="alt-plate" target="_blank" rel="noopener"></a></div>
+          <div class="f"><label for="altType">Alternate minimums</label>
+            <select id="altType">
+              <option value="precision">Precision: 600 ft / 2 SM</option>
+              <option value="nonprecision">Non-precision: 800 ft / 2 SM</option>
+              <option value="nonstd">Non-standard (from the plate)</option>
+              <option value="none">No approach: VFR descent from MEA</option>
+            </select><span class="hint">Check the plate for an "A" (non-standard or not authorized)</span></div>
+          <div class="f"><label for="altNonCig">Non-standard ceiling (ft)</label><input id="altNonCig" type="number" step="100" value="800"></div>
+          <div class="f"><label for="altNonVis">Non-standard visibility (SM)</label><input id="altNonVis" type="number" step="0.25" value="2"></div>
+        </div>
+      </fieldset>
+
+      <section class="card">
+        <h2>Weather for this plan <small id="wx-when"></small></h2>
+        <div class="wx-grid" id="wx-cards"></div>
+        <p class="sec-title">Along the route</p>
+        <ul class="hz" id="route-hz"></ul>
+      </section>
+
+      <fieldset>
+        <legend>Airplane <small>Performance used for time and fuel</small></legend>
+        <div class="grid">
+          <div class="f"><label for="preset">Model</label><select id="preset"><option value="m20k">Mooney M20K 231</option><option value="custom">Custom</option></select></div>
+          <div class="f"><label for="tail">Registration</label><input id="tail" class="icao" value="N12345" maxlength="7"></div>
+        </div>
+        <div class="tbl-wrap perf"><table>
+          <thead><tr><th>Cruise TAS (kt)</th><th>Sea level</th><th>8,000 ft</th><th>12,000 ft</th><th>24,000 ft</th><th>Fuel (gph)</th></tr></thead>
+          <tbody>
+            <tr><td>65% power</td><td><input id="p65_0" type="number"><span class="est" title="Estimated">est</span></td><td><input id="p65_8" type="number"><span class="est" title="Estimated">est</span></td><td><input id="p65_12" type="number"></td><td><input id="p65_24" type="number"></td><td><input id="g65" type="number" step="0.1"></td></tr>
+            <tr><td>75% power</td><td><input id="p75_0" type="number"><span class="est" title="Estimated">est</span></td><td><input id="p75_8" type="number"></td><td><input id="p75_12" type="number"></td><td><input id="p75_24" type="number"></td><td><input id="g75" type="number" step="0.1"></td></tr>
+          </tbody>
+        </table></div>
+        <div class="grid">
+          <div class="f"><label for="climbSL">Climb rate, sea level (fpm)</label><input id="climbSL" type="number" step="50"></div>
+          <div class="f"><label for="climb12">Climb rate, 12,000 ft (fpm)</label><input id="climb12" type="number" step="50"></div>
+          <div class="f"><label for="climb24">Climb rate, 24,000 ft (fpm)</label><input id="climb24" type="number" step="50"></div>
+          <div class="f"><label for="climbIas">Cruise-climb speed (KIAS)</label><input id="climbIas" type="number" step="5"><span class="hint">Estimated</span></div>
+          <div class="f"><label for="climbGph">Climb fuel (gph)</label><input id="climbGph" type="number" step="0.5"></div>
+          <div class="f"><label for="descFpm">Descent rate (fpm)</label><input id="descFpm" type="number" step="50"></div>
+          <div class="f"><label for="descGph">Descent fuel (gph)</label><input id="descGph" type="number" step="0.5"><span class="hint">Estimated</span></div>
+          <div class="f"><label for="taxiGal">Start, taxi, run-up (gal)</label><input id="taxiGal" type="number" step="0.5"><span class="hint">Estimated</span></div>
+          <div class="f"><label for="usableGal">Usable fuel (gal)</label><input id="usableGal" type="number" step="0.1"><span class="hint">72 / 73 early, 75.6 from 1983</span></div>
+          <div class="f"><label for="ceiling">Maximum operating altitude (ft)</label><input id="ceiling" type="number" step="1000"></div>
+          <div class="f"><label for="demoXwind">Max demonstrated crosswind (kt)</label><input id="demoXwind" type="number"></div>
+        </div>
+        <p class="sub" id="perf-src" style="margin:10px 0 0"></p>
+        <div class="checks">
+          <label class="chk good"><input type="checkbox" id="autopilot" checked> Autopilot working</label>
+          <label class="chk good"><input type="checkbox" id="datalink" checked> Datalink weather</label>
+          <label class="chk good"><input type="checkbox" id="stormscope" checked> Stormscope</label>
+          <label class="chk good"><input type="checkbox" id="oxygen"> Oxygen on board</label>
+          <label class="chk good"><input type="checkbox" id="fiki"> Approved for flight into known icing</label>
+          <label class="chk good"><input type="checkbox" id="gpsDb" checked> GPS database current</label>
+          <label class="chk good"><input type="checkbox" id="useVor"> Using VOR for this flight</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Inspections and equipment <span class="example ex-mark">Example values</span></legend>
+        <div class="grid wide">
+          <div class="f"><label for="annual">Last annual inspection</label><input id="annual" type="date"><span class="hint">§91.409: 12 calendar months</span></div>
+          <div class="f"><label for="pitot">Altimeter / static check</label><input id="pitot" type="date"><span class="hint">§91.411: 24 calendar months</span></div>
+          <div class="f"><label for="xpdr">Transponder check</label><input id="xpdr" type="date"><span class="hint">§91.413: 24 calendar months</span></div>
+          <div class="f"><label for="elt">ELT inspection</label><input id="elt" type="date"><span class="hint">§91.207: 12 calendar months</span></div>
+          <div class="f"><label for="vorCheck">Last VOR check</label><input id="vorCheck" type="date"><span class="hint">§91.171: 30 days, if using VOR</span></div>
+          <div class="f"><label for="inop">Inoperative equipment</label>
+            <select id="inop"><option value="none">None</option><option value="deferred">Deferred per §91.213</option><option value="unknown">Not yet evaluated</option></select></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Pilot <span class="example ex-mark">Example values</span></legend>
+        <div class="grid wide">
+          <div class="f"><label for="currentThru">IFR currency valid through</label><input id="currentThru" type="date"><span class="hint">6 approaches, holding, intercepting/tracking (§61.57(c))</span></div>
+          <div class="f"><label for="imc90">Actual IMC, last 90 days (hrs)</label><input id="imc90" type="number" step="0.1" min="0" value="2.5"></div>
+          <div class="f"><label for="type90">Hours in this type, last 90 days</label><input id="type90" type="number" step="0.1" min="0" value="8"></div>
+          <div class="f"><label for="sleep">Sleep last night (hrs)</label><input id="sleep" type="number" step="0.5" min="0" value="7.5"></div>
+        </div>
+        <p class="sec-title">IMSAFE: tick anything that applies today</p>
+        <div class="checks">
+          <label class="chk bad"><input type="checkbox" id="ill"> Illness or symptoms</label>
+          <label class="chk bad"><input type="checkbox" id="meds"> Medication that affects flying</label>
+          <label class="chk bad"><input type="checkbox" id="alcohol"> Alcohol in the last 8 hours</label>
+          <label class="chk bad"><input type="checkbox" id="stress"> Unusual stress</label>
+          <label class="chk bad"><input type="checkbox" id="fatigue"> Feeling tired</label>
+          <label class="chk bad"><input type="checkbox" id="hungry"> Not eaten or hydrated</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Hazards and pressures</legend>
+        <div class="grid">
+          <div class="f"><label for="fzl">Freezing level (ft MSL)</label><input id="fzl" type="number" step="500" placeholder="From model"><span class="hint" id="fzl-hint">Blank: lowest model value along the route</span></div>
+          <div class="f"><label for="tops">Cloud tops (ft MSL)</label><input id="tops" type="number" step="500" placeholder="Unknown"></div>
+        </div>
+        <div class="checks">
+          <label class="chk bad"><input type="checkbox" id="mustArrive"> Must arrive on time</label>
+          <label class="chk bad"><input type="checkbox" id="paxPressure"> Passengers pushing to go</label>
+          <label class="chk bad"><input type="checkbox" id="newDest"> First time at destination</label>
+          <label class="chk bad"><input type="checkbox" id="noPlanB"> No backup plan if I don't go</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Personal minimums <small>Set once; saved in this browser</small></legend>
+        <div class="grid">
+          <div class="f"><label for="pmDepCig">Departure ceiling (ft)</label><input id="pmDepCig" type="number" step="100" value="500"></div>
+          <div class="f"><label for="pmDepVis">Departure visibility (SM)</label><input id="pmDepVis" type="number" step="0.25" value="1"></div>
+          <div class="f"><label for="pmAddCig">Add to approach height (ft)</label><input id="pmAddCig" type="number" step="50" value="200"></div>
+          <div class="f"><label for="pmAddVis">Add to approach visibility (SM)</label><input id="pmAddVis" type="number" step="0.25" value="0.5"></div>
+          <div class="f"><label for="pmXwind">Max crosswind (kt)</label><input id="pmXwind" type="number" value="15"></div>
+          <div class="f"><label for="pmGust">Max gust (kt)</label><input id="pmGust" type="number" value="25"></div>
+          <div class="f"><label for="pmCape">CAPE that worries me (J/kg)</label><input id="pmCape" type="number" step="100" value="1000"><span class="hint">Model CAPE along the route at flight time</span></div>
+          <div class="f"><label for="pmLi">Lifted index that worries me</label><input id="pmLi" type="number" step="1" max="0" value="-3"><span class="hint">At or below this counts like CAPE over your limit; −6 or lower is strong</span></div>
+          <div class="f"><label for="pmImc">Actual IMC to stay sharp (hrs / 90 days)</label><input id="pmImc" type="number" step="0.5" value="1"><span class="hint">Below this, approach margins grow by another 200 ft / ½ SM</span></div>
+          <div class="f"><label for="pmType">Hours in type (per 90 days)</label><input id="pmType" type="number" value="5"></div>
+          <div class="f"><label for="pmSleep">Minimum sleep (hrs)</label><input id="pmSleep" type="number" step="0.5" value="7"></div>
+          <div class="f"><label for="pmFuelMin">Landing fuel reserve (min)</label><input id="pmFuelMin" type="number" step="5" value="60"><span class="hint">Your own floor; the legal one is 45</span></div>
+        </div>
+        <div class="checks">
+          <label class="chk good"><input type="checkbox" id="pmReturn" checked> Require a return option at departure</label>
+          <label class="chk good"><input type="checkbox" id="pmNightImc" checked> Night IMC allowed</label>
+          <label class="chk good"><input type="checkbox" id="pmNeedAp"> Require autopilot for single-pilot IMC</label>
+        </div>
+      </fieldset>
+    </form>
+
+    <aside class="verdict-col">
+      <div class="verdict" id="verdict" aria-live="polite">
+        <div class="lbl">Decision</div>
+        <div class="word">—</div>
+        <div class="why">Loading…</div>
+        <div class="meter">
+          <div class="lbl">Risk score</div>
+          <div class="meter-track"><div class="meter-pin" id="pin" style="left:0%"></div></div>
+          <div class="meter-scale"><span>0</span><span>5</span><span>12</span><span>20+</span></div>
+        </div>
+      </div>
+      <section class="card"><h2>Hard stops</h2><ul class="items" id="stops"></ul></section>
+      <section class="card"><h2>Cautions <small>Points add to the risk score</small></h2><ul class="items" id="cautions"></ul></section>
+      <section class="card"><details><summary id="ok-sum">Checks passed</summary><ul class="items" id="oks"></ul></details></section>
+      <p class="disclaimer">This is a decision aid, not a briefing. As pilot in command you must get all available information for the flight (§91.103), including an official briefing, NOTAMs and TFRs, and the decision is yours. Times, winds and fuel are model estimates; check the performance figures against your POH. Hard stops are regulatory limits or your own personal minimums. Score: 0–4 GO, 5–11 CAUTION, 12+ NO-GO.</p>
+    </aside>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
