@@ -41,6 +41,9 @@ OURAIRPORTS = "https://davidmegginson.github.io/ourairports-data/"
 UA = {"User-Agent": "ifr-go-no-go/1.2 (personal preflight tool)"}
 TTL = 120
 _wx_cache = {}
+OPEN_METEO = "https://api.open-meteo.com/v1/forecast?"
+OM_TTL, OM_ERR_TTL = 5400, 600  # model runs change hourly at best; don't retry a refusal for 10 min
+_om_cache = {}
 
 
 # ---------------------------------------------------------------- downloads
@@ -463,6 +466,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json(APPR.lookup(q.get("apt", "")))
             if url.path == "/nav/alternates":
                 return self.json(alternates(q.get("apt", ""), min(200.0, float(q.get("radius", 100)))))
+            if url.path == "/om":
+                return self.open_meteo(url.query)
             if url.path == "/nbm":
                 return self.json(NBM.lookup(q.get("prod", "nbs"), [i for i in q.get("ids", "").split(",") if i][:80]))
             if url.path == "/spc":
@@ -503,6 +508,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             status, body = 200, b"[]"
         if status == 200:
             _wx_cache[target] = (time.time(), body)
+        self.reply(status, body, "application/json")
+
+    def open_meteo(self, query):
+        """Relay Open-Meteo with a cache: its free tier allows 10,000 calls a day, counted per location."""
+        now = time.time()
+        hit = _om_cache.get(query)
+        if hit and now - hit[0] < hit[1]:
+            return self.reply(hit[2], hit[3], "application/json")
+        try:
+            status, body = 200, fetch(OPEN_METEO + query, 40)
+        except urllib.error.HTTPError as err:
+            status, body = err.code, err.read() or json.dumps({"error": True, "reason": str(err)}).encode()
+        except Exception as err:
+            status, body = 502, json.dumps({"error": True, "reason": f"Open-Meteo unreachable: {err}"}).encode()
+        for k in [k for k, v in _om_cache.items() if now - v[0] > OM_TTL]:
+            del _om_cache[k]
+        _om_cache[query] = (now, OM_TTL if status == 200 else OM_ERR_TTL, status, body)
         self.reply(status, body, "application/json")
 
     def json(self, obj, status=200):

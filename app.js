@@ -317,6 +317,14 @@ let W = { route: null, apt: {}, charts: {}, pireps: [], sigmets: [], gairmets: [
 let pendingCharts = null; // saved approach choices, applied once the lists arrive
 let refreshTimer = null;
 
+// Open-Meteo through the local server (which caches it); errors come back as { error } with Open-Meteo's reason
+const omFetch = url => fetch(url).then(async r => {
+  if (r.ok) return r.json();
+  let reason = "";
+  try { reason = (await r.json()).reason || ""; } catch {}
+  return { error: r.status === 429 ? `Open-Meteo's free daily limit is used up${reason ? ` (${reason.replace(/\.$/, "")})` : ""}` : `Open-Meteo answered ${r.status}${reason ? `: ${reason}` : ""}` };
+}).catch(e => ({ error: e.message }));
+
 async function getJSON(path, params) {
   const res = await fetch(`${path}?${new URLSearchParams(params)}`);
   if (!res.ok) {
@@ -373,9 +381,11 @@ async function loadAll() {
     // model samples along route + alternate leg, every ~20 nm, at most 40 points
     const path = dest && altPt ? [...pts, altPt] : pts;
     const pathNm = path.slice(1).reduce((s, p, i) => s + gcNm(path[i], p), 0);
-    const omSamples = path.length > 1 ? samplePath(path, Math.max(20, pathNm / 39)) : [];
-    const h0 = new Date(Math.floor(etdMs / 3600e3) * 3600e3 - 3600e3);
-    const h1 = new Date(+h0 + 10 * 3600e3);
+    // Open-Meteo's free tier counts each location (and each 10 variables) as a call, 10,000 a day: keep the
+    // points few and the windows on 12 h boundaries, so the server's cache answers repeat requests
+    const omSamples = path.length > 1 ? samplePath(path, Math.max(25, pathNm / 19)) : [];
+    const h0 = new Date(Math.floor((etdMs - 2 * 3600e3) / (12 * 3600e3)) * 12 * 3600e3);
+    const h1 = new Date(+h0 + 36 * 3600e3);
     const hourly = ["cape", "lifted_index", "freezing_level_height", ...LEVELS.flatMap(L => [`wind_speed_${L}hPa`, `wind_direction_${L}hPa`, `geopotential_height_${L}hPa`, `temperature_${L}hPa`, `cloud_cover_${L}hPa`])];
 
     // area grid for the map (CAPE, cloud base and tops) at mid-flight, plus every METAR in the area
@@ -384,16 +394,17 @@ async function loadAll() {
     const midHour = new Date(Math.round((etdMs + dist / 150 * 30 * 60e3) / 3600e3) * 3600e3);
     const grid = [];
     if (box) {
-      const nx = 11, ny = Math.max(5, Math.min(9, Math.round(nx * (box.n - box.s) / ((box.e - box.w) * Math.cos(rad((box.n + box.s) / 2))))));
+      const nx = 8, ny = Math.max(4, Math.min(6, Math.round(nx * (box.n - box.s) / ((box.e - box.w) * Math.cos(rad((box.n + box.s) / 2))))));
       const dLat = (box.n - box.s) / ny, dLon = (box.e - box.w) / nx;
       for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) grid.push({ lat: box.s + dLat * (j + 0.5), lon: box.w + dLon * (i + 0.5), dLat, dLon });
     }
-    const gridUrl = "https://api.open-meteo.com/v1/forecast?" + new URLSearchParams({
+    const g0 = new Date(Math.floor(+midHour / (12 * 3600e3)) * 12 * 3600e3), gHour = Math.round((+midHour - +g0) / 3600e3);
+    const gridUrl = "/om?" + new URLSearchParams({
       latitude: grid.map(g => g.lat.toFixed(3)).join(","), longitude: grid.map(g => g.lon.toFixed(3)).join(","),
       hourly: ["cape", ...LEVELS.flatMap(L => [`cloud_cover_${L}hPa`, `geopotential_height_${L}hPa`])].join(","),
-      timezone: "GMT", start_hour: midHour.toISOString().slice(0, 16), end_hour: midHour.toISOString().slice(0, 16),
+      timezone: "GMT", start_hour: g0.toISOString().slice(0, 16), end_hour: new Date(+g0 + 12 * 3600e3).toISOString().slice(0, 16),
     });
-    const omUrl = "https://api.open-meteo.com/v1/forecast?" + new URLSearchParams({
+    const omUrl = "/om?" + new URLSearchParams({
       latitude: omSamples.map(s => s.lat.toFixed(3)).join(","), longitude: omSamples.map(s => s.lon.toFixed(3)).join(","),
       hourly: hourly.join(","), wind_speed_unit: "kn", timezone: "GMT",
       start_hour: h0.toISOString().slice(0, 16), end_hour: h1.toISOString().slice(0, 16),
@@ -401,21 +412,21 @@ async function loadAll() {
 
     const [areaMetars, gridData] = await Promise.all([
       box ? wx("metar", { bbox: [box.s, box.w, box.n, box.e].map(n => n.toFixed(2)).join(",") }).catch(() => []) : [],
-      grid.length ? fetch(gridUrl).then(r => (r.ok ? r.json() : null)).catch(() => null) : null,
+      grid.length ? omFetch(gridUrl) : null,
     ]);
-    const gridList = Array.isArray(gridData) ? gridData : gridData ? [gridData] : [];
+    const gridList = Array.isArray(gridData) ? gridData : gridData && !gridData.error ? [gridData] : [];
     const gridCells = grid.map((g, i) => {
       const hr = gridList[i]?.hourly;
       if (!hr) return { ...g };
-      const cp = cloudProfile(hr, 0);
-      return { ...g, cape: hr.cape?.[0] ?? null, base: cp.base, tops: cp.tops };
+      const cp = cloudProfile(hr, gHour);
+      return { ...g, cape: hr.cape?.[gHour] ?? null, base: cp.base, tops: cp.tops };
     });
     const [metars, tafs, sigmets, gairmets, om, ...charts] = await Promise.all([
       ids.length ? wx("metar", { ids: ids.join(",") }) : [],
       ids.length ? wx("taf", { ids: ids.join(",") }) : [],
       wx("airsigmet", {}).catch(() => []),
       wx("gairmet", { date: snap.toISOString().slice(0, 19) + "Z" }).catch(() => []),
-      omSamples.length ? fetch(omUrl).then(r => (r.ok ? r.json() : Promise.reject(new Error(`Open-Meteo answered ${r.status}`)))).catch(e => ({ error: e.message })) : [],
+      omSamples.length ? omFetch(omUrl) : [],
       ...[dep, dest, altPt].map(a => (a ? getJSON("/nav/approaches", { apt: a.faa || a.ident }).catch(() => ({ charts: [] })) : Promise.resolve({ charts: [] }))),
     ]);
     if (seq !== loadSeq) return;
@@ -454,7 +465,7 @@ async function loadAll() {
       charts: { dep: charts[0], dest: charts[1], alt: charts[2] },
       pireps: pireps.filter(p => !seen.has(p.rawOb) && seen.add(p.rawOb)),
       om: omList.map((o, i) => ({ ...omSamples[i], hourly: o.hourly })), omError: om?.error || null,
-      areaMetars, grid: gridCells, gridTime: midHour, box, altCands, nbm, nbmError, spc,
+      areaMetars, grid: gridCells, gridTime: midHour, gridError: gridData?.error || null, box, altCands, nbm, nbmError, spc,
       loadedAt: new Date(), error: null, loading: false };
     fillCharts();
     renderMap();
@@ -1258,7 +1269,8 @@ function renderMap() {
   map._routeBounds = L.latLngBounds(all).pad(0.25);
   map.invalidateSize();
   map.fitBounds(map._routeBounds);
-  $("#map-when").textContent = W.gridTime ? `Model layers for ${fmtZ(W.gridTime)} · ${metars.length} METARs` : "";
+  $("#map-when").textContent = W.gridError ? `Model layers unavailable: ${W.gridError} · ${metars.length} METARs`
+    : W.gridTime ? `Model layers for ${fmtZ(W.gridTime)} · ${metars.length} METARs` : "";
 }
 
 // outlook: reports that describe now (METARs, SIGMETs, G-AIRMETs, PIREPs) are switched off and marked;
@@ -1281,7 +1293,7 @@ function applyMapOutlook(o) {
   }
   for (const label of document.querySelectorAll("#map .leaflet-control-layers-overlays label"))
     label.classList.toggle("stale", on && OBS_LAYERS.some(n => label.textContent.includes(n)));
-  if (on && W.gridTime) $("#map-when").textContent = `Model layers for ${fmtLocal(W.gridTime)} (${fmtZ(W.gridTime)}) · outlook`;
+  if (on && W.gridTime && !W.gridError) $("#map-when").textContent = `Model layers for ${fmtLocal(W.gridTime)} (${fmtZ(W.gridTime)}) · outlook`;
 }
 
 // ---------- vertical profile (SVG) ----------
