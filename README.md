@@ -90,6 +90,7 @@ The server listens only on your own computer (127.0.0.1). It isn't meant to be p
 - **US only.** It uses FAA rules, aviationweather.gov and the FAA d-TPP.
 - **Alternate minimums.** The alternate list uses standard alternate minimums (600-2 with an ILS, 800-2 otherwise). It can't see non-standard alternate minimums (the ▲A note on the plate); enter those in the alternate section.
 - **Model data.** Cloud, CAPE, lifted index, freezing level and winds aloft come from the Open-Meteo forecast model. They are estimates, not observations.
+- **Open-Meteo's free limit.** Open-Meteo allows 10,000 calls a day per internet connection and counts every point along the route and on the map. The app caches model data for 90 minutes and uses about 175 calls for each new route or time window, which is plenty for normal planning. If the limit is reached, the map and profile say so, and the model data returns the next day.
 - **Outlooks are not decisions.** Two or three days out, the timing of fronts can be off by hours, and the exact ceiling at one airport is uncertain. The National Blend of Models gives no probability for ceilings below 500 ft, so outlook mode compares your approach minimums with the most likely ceiling and shows the chance of IFR as the risk. Make the go/no-go once TAFs cover your flight.
 - **Not checked.** NOTAMs, TFRs, terrain, airspace and runway closures. Get an official briefing.
 

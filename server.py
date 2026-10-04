@@ -12,7 +12,7 @@ Reference data is cached in ~/.cache/ifr-go-no-go/:
   OurAirports airports/runways/navaids (refreshed weekly) and the FAA d-TPP
   metafile for the current 28-day cycle.
 """
-VERSION = "1.2"
+VERSION = "1.2.01"
 
 import csv
 import datetime as dt
@@ -38,7 +38,7 @@ UPSTREAM = "https://aviationweather.gov/api/data/"
 PRODUCTS = {"metar", "taf", "pirep", "airsigmet", "gairmet", "fix"}
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js"}
 OURAIRPORTS = "https://davidmegginson.github.io/ourairports-data/"
-UA = {"User-Agent": "ifr-go-no-go/1.2 (personal preflight tool)"}
+UA = {"User-Agent": "ifr-go-no-go/1.2.01 (personal preflight tool)"}
 TTL = 120
 _wx_cache = {}
 OPEN_METEO = "https://api.open-meteo.com/v1/forecast?"
