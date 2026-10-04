@@ -165,6 +165,23 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
 .head { color: var(--stop); } .tail { color: var(--go); }
 .perf input { width: 5.2rem; padding: 4px 6px; text-align: right; }
 .perf td { padding: 4px 6px; }
+.ac-type { grid-column: span 2; }
+.ac-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.ac-status { font-size: 0.85rem; color: var(--muted); }
+.ac-status.dirty { color: var(--caution); font-weight: 600; }
+.ps-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ps-tabs button { padding: 5px 14px; }
+.ps-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; justify-content: space-between; margin-top: 10px; }
+.ps-head .f { width: 12rem; }
+.ps-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.ps-tools button, .ps-tools select { font-size: 0.85rem; padding: 5px 10px; width: auto; }
+.ps-fill { display: inline-flex; gap: 4px; }
+.perf button.icon { padding: 2px 8px; font-size: 0.8rem; }
+.ps-paste { margin-top: 10px; }
+.ps-paste summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.9rem; }
+.ps-paste textarea { width: 100%; font: 0.8rem/1.4 var(--f-data); color: var(--ink); background: var(--inset); border: 1px solid var(--line); border-radius: 7px; padding: 8px; margin: 6px 0; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+@media (max-width: 520px) { .ac-type { grid-column: auto; } }
 .est { font: 600 0.62rem var(--f-data); color: var(--caution); margin-left: 3px; vertical-align: 1px; }
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 4px; }
 .stat { background: var(--panel); padding: 10px 12px; }
@@ -245,7 +262,7 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
           <div class="f alt-f"><label for="alt">Alternate</label><div class="alt-in"><input id="alt" class="icao" value="KPNS" maxlength="4" aria-label="Alternate airport"><select id="altPick" aria-label="Pick an alternate within 100 nm of the destination"><option value="">Alternates load with the weather</option></select></div><span class="hint" id="alt-hint">Blank if none. The list shows airports with a published approach within 100 nm of the destination, checked against standard alternate minimums at your ETA.</span></div>
           <div class="f etd-f"><label for="etdDate">Departure time (local, 24 h)</label><div class="etd-in"><input id="etdDate" type="date"><input id="etdTime" class="time24" inputmode="numeric" maxlength="5" placeholder="HH:MM" autocomplete="off" aria-label="Departure time, 24-hour"></div><input id="etd" type="hidden"><span class="hint" id="etd-z"></span></div>
           <div class="f"><label for="cruise">Cruise altitude (ft MSL)</label><input id="cruise" type="number" step="1000" value="9000"></div>
-          <div class="f"><label for="power">Power setting</label><select id="power"><option value="65">65% (economy)</option><option value="75">75% (performance)</option></select></div>
+          <div class="f"><label for="power">Power setting</label><select id="power"></select><span class="hint">From the airplane's preset</span></div>
           <div class="f"><label for="altCruise">Altitude to alternate (ft)</label><input id="altCruise" type="number" step="1000" value="5000"></div>
           <div class="f"><label for="mea">Highest MEA (ft MSL)</label><input id="mea" type="number" step="100" value="2000"></div>
           <div class="f"><label for="fuelGal">Fuel on board (gal)</label><input id="fuelGal" type="number" step="1" min="0" value="72"><span class="hint">Usable fuel at engine start</span></div>
@@ -321,31 +338,56 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
         <ul class="hz" id="route-hz"></ul>
       </section>
 
-      <fieldset>
-        <legend>Airplane <small>Performance used for time and fuel</small></legend>
+      <fieldset id="ac-editor">
+        <legend>Airplane <small>Performance presets, saved by registration in this browser</small></legend>
         <div class="grid">
-          <div class="f"><label for="preset">Model</label><select id="preset"><option value="m20k">Mooney M20K 231</option><option value="custom">Custom</option></select></div>
-          <div class="f"><label for="tail">Registration</label><input id="tail" class="icao" value="N12345" maxlength="7"></div>
+          <div class="f"><label for="acPick">Aircraft</label><select id="acPick"></select></div>
+          <div class="f"><label for="ac_tail">Registration</label><input id="ac_tail" data-ac="tail" class="icao" maxlength="7" placeholder="N12345" autocomplete="off"></div>
+          <div class="f ac-type"><label for="ac_type">Type</label><input id="ac_type" data-ac="type" placeholder="e.g. Mooney M20K 231" autocomplete="off"></div>
         </div>
-        <div class="tbl-wrap perf"><table>
-          <thead><tr><th>Cruise TAS (kt)</th><th>Sea level</th><th>8,000 ft</th><th>12,000 ft</th><th>24,000 ft</th><th>Fuel (gph)</th></tr></thead>
-          <tbody>
-            <tr><td>65% power</td><td><input id="p65_0" type="number"><span class="est" title="Estimated">est</span></td><td><input id="p65_8" type="number"><span class="est" title="Estimated">est</span></td><td><input id="p65_12" type="number"></td><td><input id="p65_24" type="number"></td><td><input id="g65" type="number" step="0.1"></td></tr>
-            <tr><td>75% power</td><td><input id="p75_0" type="number"><span class="est" title="Estimated">est</span></td><td><input id="p75_8" type="number"></td><td><input id="p75_12" type="number"></td><td><input id="p75_24" type="number"></td><td><input id="g75" type="number" step="0.1"></td></tr>
-          </tbody>
-        </table></div>
+        <div class="ac-actions">
+          <button type="button" data-act="save">Save preset</button>
+          <button type="button" class="ghost" data-act="import" title="Read a performance table from a file (ForeFlight write-up, CSV, Markdown or an exported preset)">Import file…</button>
+          <button type="button" class="ghost" data-act="export" title="Download this preset to back it up or use it in another browser">Export</button>
+          <button type="button" class="ghost" data-act="delete">Delete</button>
+          <span class="ac-status" id="ac-status" role="status"></span>
+          <input type="file" id="ac_file" accept=".md,.txt,.csv,.tsv,.json" hidden>
+        </div>
+        <p class="sec-title">Whole airplane</p>
         <div class="grid">
-          <div class="f"><label for="climbSL">Climb rate, sea level (fpm)</label><input id="climbSL" type="number" step="50"></div>
-          <div class="f"><label for="climb12">Climb rate, 12,000 ft (fpm)</label><input id="climb12" type="number" step="50"></div>
-          <div class="f"><label for="climb24">Climb rate, 24,000 ft (fpm)</label><input id="climb24" type="number" step="50"></div>
-          <div class="f"><label for="climbIas">Cruise-climb speed (KIAS)</label><input id="climbIas" type="number" step="5"><span class="hint">Estimated</span></div>
-          <div class="f"><label for="climbGph">Climb fuel (gph)</label><input id="climbGph" type="number" step="0.5"></div>
-          <div class="f"><label for="descFpm">Descent rate (fpm)</label><input id="descFpm" type="number" step="50"></div>
-          <div class="f"><label for="descGph">Descent fuel (gph)</label><input id="descGph" type="number" step="0.5"><span class="hint">Estimated</span></div>
-          <div class="f"><label for="taxiGal">Start, taxi, run-up (gal)</label><input id="taxiGal" type="number" step="0.5"><span class="hint">Estimated</span></div>
-          <div class="f"><label for="usableGal">Usable fuel (gal)</label><input id="usableGal" type="number" step="0.1"><span class="hint">72 / 73 early, 75.6 from 1983</span></div>
-          <div class="f"><label for="ceiling">Maximum operating altitude (ft)</label><input id="ceiling" type="number" step="1000"></div>
-          <div class="f"><label for="demoXwind">Max demonstrated crosswind (kt)</label><input id="demoXwind" type="number"></div>
+          <div class="f"><label for="ac_usableGal">Usable fuel (gal)</label><input id="ac_usableGal" data-ac="usableGal" type="number" step="0.1"></div>
+          <div class="f"><label for="ac_taxiGal">Taxi and run-up (gal)</label><input id="ac_taxiGal" data-ac="taxiGal" type="number" step="0.5"></div>
+          <div class="f"><label for="ac_ceiling">Maximum altitude (ft)</label><input id="ac_ceiling" data-ac="ceiling" type="number" step="1000"></div>
+          <div class="f"><label for="ac_demoXwind">Demo crosswind (kt)</label><input id="ac_demoXwind" data-ac="demoXwind" type="number"></div>
+          <div class="f"><label for="ac_climbGphLow">Climb fuel, low (gph)</label><input id="ac_climbGphLow" data-ac="climbGphLow" type="number" step="0.1"><span class="hint">At sea level</span></div>
+          <div class="f"><label for="ac_climbGphHigh">Climb fuel, high (gph)</label><input id="ac_climbGphHigh" data-ac="climbGphHigh" type="number" step="0.1"><span class="hint">At maximum altitude</span></div>
+          <div class="f"><label for="ac_descGphLow">Descent fuel, low (gph)</label><input id="ac_descGphLow" data-ac="descGphLow" type="number" step="0.1"><span class="hint">At sea level</span></div>
+          <div class="f"><label for="ac_descGphHigh">Descent fuel, high (gph)</label><input id="ac_descGphHigh" data-ac="descGphHigh" type="number" step="0.1"><span class="hint">At maximum altitude</span></div>
+          <div class="f"><label for="ac_descFpm">Descent rate (fpm)</label><input id="ac_descFpm" data-ac="descFpm" type="number" step="50"></div>
+        </div>
+        <p class="sec-title">Performance by power setting</p>
+        <div class="ps-tabs" id="ps-tabs" role="group" aria-label="Power settings"></div>
+        <div id="ps-body">
+          <div class="ps-head">
+            <div class="f"><label for="ps_name">Setting name</label><input id="ps_name" maxlength="24" placeholder="e.g. 75%" autocomplete="off"></div>
+            <button type="button" class="ghost" data-act="delSetting">Delete this setting</button>
+          </div>
+          <div class="tbl-wrap perf"><table>
+            <thead><tr><th>Pressure alt (ft)</th><th>Climb IAS (kt)</th><th>Rate of climb (fpm)</th><th>Cruise TAS (kt)</th><th>Fuel flow (gph)</th><th>Descent IAS (kt)</th><th><span class="vh">Remove</span></th></tr></thead>
+            <tbody id="ps-rows"></tbody>
+          </table></div>
+          <div class="ps-tools">
+            <button type="button" class="ghost" data-act="addRow">＋ Row</button>
+            <span class="ps-fill"><button type="button" class="ghost" data-act="fill">Fill altitudes</button><select id="ps_step" aria-label="Altitude step"><option value="1000">every 1,000 ft</option><option value="2000" selected>every 2,000 ft</option></select></span>
+            <select id="ps_copy" aria-label="Copy the climb and descent columns from another power setting"></select>
+          </div>
+          <details class="ps-paste">
+            <summary>Paste a table</summary>
+            <p class="sub">One row per altitude, with the columns in this order: pressure altitude, climb IAS, rate of climb, cruise TAS, fuel flow, descent IAS (optional). Copy from a spreadsheet, a CSV file or a Markdown table. The rows replace this setting's table.</p>
+            <textarea id="ps_paste" rows="6" spellcheck="false" aria-label="Table to paste"></textarea>
+            <button type="button" data-act="pasteApply">Use these rows</button>
+          </details>
+          <p class="sub" style="margin:8px 0 0">Blank cells are filled in from the rows around them. Climb and descent fuel come from the whole-airplane values, blended from sea level to the maximum altitude.</p>
         </div>
         <p class="sub" id="perf-src" style="margin:10px 0 0"></p>
         <div class="checks">

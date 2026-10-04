@@ -23,7 +23,6 @@ const PRESETS = {
     descFpm: 500, descGph: 9, taxiGal: 1.5, usableGal: 72, ceiling: 24000, demoXwind: 15,
   },
 };
-const PERF_IDS = Object.keys(PRESETS.m20k);
 
 // ---------- helpers ----------
 const num = v => (v === "" || v == null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -232,20 +231,32 @@ function cloudProfile(hourly, h) {
 const coverAt = (cp, altFt) => interp(cp.lv.map(x => [x.h, x.cc]), altFt);
 
 // ---------- performance ----------
+// IAS to TAS in the standard atmosphere
+const iasToTas = (ias, alt) => ias / Math.sqrt(Math.pow(Math.max(0.2, 1 - 6.8756e-6 * alt), 4.2559));
+const settingComplete = st => !!st && st.rows.some(r => num(r.tas) != null) && st.rows.some(r => num(r.gph) != null);
 function perfFrom(f) {
-  const tas = p => [[0, num(f[`p${p}_0`])], [8000, num(f[`p${p}_8`])], [12000, num(f[`p${p}_12`])], [24000, num(f[`p${p}_24`])]];
+  const a = AC || exampleAircraft(PRESETS.m20k);
+  const st = a.settings.find(x => x.name === f.power) || a.settings[0] || { name: "", rows: [] };
+  const col = k => st.rows.filter(r => num(r.alt) != null && num(r[k]) != null).map(r => [num(r.alt), num(r[k])]).sort((x, y) => x[0] - y[0]);
+  const T = { tas: col("tas"), gph: col("gph"), roc: col("roc"), climbIas: col("climbIas"), descIas: col("descIas") };
+  const top = num(a.ceiling) || Math.max(24000, ...st.rows.map(r => num(r.alt) || 0));
+  const lowHigh = (lo, hi, dflt) => alt => interp([[0, num(lo)], [top, num(hi)]], alt) ?? dflt; // one value alone holds for all altitudes
+  const cruiseTas = alt => interp(T.tas, alt) ?? 150;
+  const cruiseGphAt = alt => interp(T.gph, alt) ?? 11;
   return {
-    cruiseTas: alt => interp(tas(f.power), alt) ?? 150,
-    cruiseGph: num(f[`g${f.power}`]) ?? 11,
-    climbFpm: alt => Math.max(100, interp([[0, num(f.climbSL)], [12000, num(f.climb12)], [24000, num(f.climb24)]], alt) ?? 700),
-    climbTas: alt => (num(f.climbIas) ?? 120) * (1 + 0.02 * alt / 1000),
-    climbGph: num(f.climbGph) ?? 16,
-    descFpm: num(f.descFpm) || 500,
-    descGph: num(f.descGph) ?? 8,
-    taxiGal: num(f.taxiGal) ?? 1.5,
-    usableGal: num(f.usableGal),
-    ceiling: num(f.ceiling),
-    demoXwind: num(f.demoXwind),
+    setting: st.name, complete: settingComplete(st),
+    cruiseTas, cruiseGphAt,
+    cruiseGph: cruiseGphAt(num(f.cruise) ?? 8000), // at the planned cruise altitude, for reserves and the missed approach
+    climbFpm: alt => Math.max(100, interp(T.roc, alt) ?? 700),
+    climbTas: alt => iasToTas(interp(T.climbIas, alt) ?? 120, alt),
+    climbGph: lowHigh(a.climbGphLow, a.climbGphHigh, 16),
+    descFpm: num(a.descFpm) || 500,
+    descTas: alt => { const ias = interp(T.descIas, alt); return ias != null ? iasToTas(ias, alt) : cruiseTas(alt); },
+    descGph: lowHigh(a.descGphLow, a.descGphHigh, 8),
+    taxiGal: num(a.taxiGal) ?? 1.5,
+    usableGal: num(a.usableGal),
+    ceiling: num(a.ceiling),
+    demoXwind: num(a.demoXwind),
   };
 }
 
@@ -267,16 +278,16 @@ function simulate(pts, o) {
       const course = bearing(pos, b);
       const w = windAt(pos, alt, o.t0 + t * 60e3);
       if (!w) noWind = true;
-      const descGs = groundspeed(o.perf.cruiseTas(alt), course, w).gs;
+      const descGs = groundspeed(o.perf.descTas(alt), course, w).gs;
       const descNm = Math.max(0, alt - target) / o.perf.descFpm / 60 * descGs;
       let phase = alt < o.cruise - 20 ? "climb" : "cruise";
       if (total - along <= descNm + 0.5 && alt > target) phase = "descent";
-      const tas = phase === "climb" ? o.perf.climbTas(alt) : o.perf.cruiseTas(alt);
+      const tas = phase === "climb" ? o.perf.climbTas(alt) : phase === "descent" ? o.perf.descTas(alt) : o.perf.cruiseTas(alt);
       const g = groundspeed(tas, course, w);
       const hrs = step / g.gs;
       if (phase === "climb") alt = Math.min(o.cruise, alt + o.perf.climbFpm(alt) * hrs * 60);
       if (phase === "descent") alt = Math.max(target, alt - o.perf.descFpm * hrs * 60);
-      const gph = phase === "climb" ? o.perf.climbGph : phase === "descent" ? o.perf.descGph : o.perf.cruiseGph;
+      const gph = phase === "climb" ? o.perf.climbGph(alt) : phase === "descent" ? o.perf.descGph(alt) : o.perf.cruiseGphAt(alt);
       fuel += gph * hrs; leg.fuel += gph * hrs;
       t += hrs * 60; leg.time += hrs * 60;
       if (alt > 12500) above125 += hrs * 60;
@@ -521,6 +532,7 @@ function evaluate(f) {
   ctx.sim = sim; ctx.altSim = altSim; ctx.times = { etd, eta, etaAlt };
 
   if (cruise < mea) add("stop", "Plan", `Cruise altitude ${ft(cruise)} ft is below the highest MEA (${ft(mea)} ft).`, "§91.177");
+  if (!P.complete) add("stop", "Aircraft", `No cruise performance entered for the ${P.setting || "selected"} power setting. Fill in its table under Airplane, or pick another setting.`, "Performance");
   if (P.ceiling && cruise > P.ceiling) add("stop", "Aircraft", `Cruise altitude is above the airplane's ${ft(P.ceiling)} ft maximum operating altitude.`, "AFM");
   if (!f.oxygen && sim) {
     if (cruise > 14000) add("stop", "Pilot", "Above 14,000 ft the crew must use oxygen the whole time, and there's none on board.", "§91.211(a)(2)");
@@ -955,7 +967,7 @@ function render({ items, ctx }) {
     const rows = s.legs.map(l => row(l, false)).join("") + (a ? a.legs.map(l => row(l, true)).join("") : "");
     $("#legs").innerHTML = `<thead><tr><th>Leg</th><th>NM</th><th>Course</th><th>Wind · temp</th><th>Component</th><th>GS</th><th>Time</th><th>Gal</th><th>CAPE</th><th>Frz lvl</th></tr></thead><tbody>${rows}</tbody>
       <tfoot><tr><td>To destination</td><td>${Math.round(s.total)}</td><td></td><td></td><td>${compTxt(avgHead)}</td><td></td><td>${fmtHM(s.minutes)}</td><td>${s.fuel.toFixed(1)}</td><td></td><td></td></tr></tfoot>`;
-    $("#wind-src").textContent = `Winds and temperatures at your altitude come from the Open-Meteo forecast model for the time you pass each point; courses are true. Time and fuel include the climb at ${$("#climbIas").value} KIAS and the descent at ${$("#descFpm").value} fpm, but not taxi. The grey alternate leg adds ${MISSED_MIN} min for a missed approach.`;
+    $("#wind-src").textContent = `Winds and temperatures at your altitude come from the Open-Meteo forecast model for the time you pass each point; courses are true. Time and fuel use the ${esc(P.setting)} table of the ${esc(AC?.tail || "example")} preset: its climb speeds and rates, cruise speeds and fuel flows, and a ${P.descFpm} fpm descent, but not taxi. The grey alternate leg adds ${MISSED_MIN} min for a missed approach.`;
   } else {
     $("#nav-when").textContent = "";
     $("#trip-stats").innerHTML = stat("Route", W.loading ? "Loading…" : "—", W.route?.errors?.length ? "Fix the route above" : "");
@@ -989,9 +1001,9 @@ function render({ items, ctx }) {
   $("#route-hz").innerHTML = ctx.hazards.map(h => `<li><span class="k ${h.level}">${esc(h.kind)}</span><span>${esc(h.text)}</span></li>`).join("")
     || `<li><span class="k info">Route</span><span>${W.loading ? "Loading…" : "Route hazards appear once the route resolves."}</span></li>`;
   $("#fzl-hint").textContent = ctx.fzlSrc && ctx.fzlSrc !== "entered" && ctx.fzl != null ? `Using ${ft(ctx.fzl)} ft (${ctx.fzlSrc})` : "Blank: lowest model value along the route";
-  $("#perf-src").innerHTML = $("#preset").value === "m20k"
-    ? 'Mooney M20K 231 figures from the AOPA Pilot review (Feb 1994) and published specs: cruise TAS at 12,000 and 24,000 ft, 10.9 / 12.7 gph at 65% / 75%, about 18 gph in the climb, 15 kt demonstrated crosswind. Values marked <span class="est">est</span>, and the climb speed, descent fuel and taxi fuel, are estimates. Check every figure against your POH.'
-    : "Custom performance. Check these figures against your POH.";
+  $("#perf-src").innerHTML = acKey === AC_EXAMPLE
+    ? 'Example Mooney M20K 231 figures from the AOPA Pilot review (Feb 1994) and published specs. Climb speed, descent and taxi fuel are estimates. Make your own preset: enter your registration, replace the figures with your POH or ForeFlight numbers and press Save preset.'
+    : `${esc(AC.tail || "This airplane")}${AC.type ? ` (${esc(AC.type)})` : ""}: your own figures. Check them against your POH.`;
 
   const banners = [];
   if (W.error) banners.push(`<div class="banner err">${esc(W.error)}</div>`);
@@ -1264,6 +1276,248 @@ function setupProfileZoom() {
   el.addEventListener("dblclick", () => { PZ.x0 = 0; PZ.x1 = null; PZ.y0 = 0; PZ.y1 = null; pzDraw(); });
 }
 
+// ---------- aircraft presets ----------
+// One preset per registration, saved in this browser: whole-airplane figures plus one table per power
+// setting, laid out like ForeFlight's (per pressure altitude: climb IAS and rate, cruise TAS and fuel
+// flow, descent IAS). Blank cells are interpolated.
+const AC_KEY = "ifr-gng-aircraft-v1";
+const AC_EXAMPLE = "__example", AC_NEW = "__new";
+const AC_FIELD_RE = /^(ac|ps)_/; // editor inputs: kept in the preset, not in the saved flight form
+const AC_COLS = [["alt", "Pressure altitude", 1000], ["climbIas", "Climb IAS", 5], ["roc", "Rate of climb", 50], ["tas", "Cruise TAS", 1], ["gph", "Fuel flow", 0.1], ["descIas", "Descent IAS", 5]];
+const blankRow = alt => ({ alt, climbIas: null, roc: null, tas: null, gph: null, descIas: null });
+const clone = o => JSON.parse(JSON.stringify(o));
+let AC = null, acKey = AC_EXAMPLE, acDirty = false, acTab = 0;
+
+function acStore() { try { return JSON.parse(store.get(AC_KEY) || "{}") || {}; } catch { return {}; } }
+function acPut(all) { store.set(AC_KEY, JSON.stringify(all)); }
+// the built-in example, or a preset made from the old fixed form (65%/75% TAS at 0, 8, 12 and 24 thousand ft)
+function exampleAircraft(p, extra = {}) {
+  const roc = alt => Math.round(interp([[0, num(p.climbSL)], [12000, num(p.climb12)], [24000, num(p.climb24)]], alt) ?? 700);
+  const setting = (name, k) => ({ name, rows: [0, 8, 12, 24].map(th => ({ ...blankRow(th * 1000), climbIas: num(p.climbIas), roc: roc(th * 1000), tas: num(p[`p${k}_${th}`]), gph: num(p[`g${k}`]) })) });
+  return { tail: "", type: "Mooney M20K 231", usableGal: num(p.usableGal), taxiGal: num(p.taxiGal), ceiling: num(p.ceiling), demoXwind: num(p.demoXwind),
+    climbGphLow: num(p.climbGph), climbGphHigh: num(p.climbGph), descGphLow: num(p.descGph), descGphHigh: num(p.descGph), descFpm: num(p.descFpm),
+    settings: [setting("75%", 75), setting("65%", 65)], ...extra };
+}
+function blankAircraft() {
+  const rows = () => Array.from({ length: 13 }, (_, i) => blankRow(i * 2000));
+  return { tail: "", type: "", usableGal: null, taxiGal: null, ceiling: null, demoXwind: null,
+    climbGphLow: null, climbGphHigh: null, descGphLow: null, descGphHigh: null, descFpm: 500,
+    settings: [{ name: "75%", rows: rows() }, { name: "65%", rows: rows() }] };
+}
+function loadAircraft(key) {
+  const all = acStore();
+  acKey = key === AC_EXAMPLE || key === AC_NEW || all[key] ? key : AC_EXAMPLE;
+  AC = acKey === AC_EXAMPLE ? exampleAircraft(PRESETS.m20k) : acKey === AC_NEW ? blankAircraft() : clone(all[acKey]);
+  acDirty = false; acTab = 0;
+  renderAcEditor(); renderPowerOptions();
+}
+function initAircraft(saved) {
+  const all = acStore();
+  // older versions kept one airplane in the flight form; turn a customised one into a preset
+  if (saved && saved.preset === "custom" && saved.p75_0 != null && !Object.keys(all).length) {
+    const tail = (saved.tail || "MYPLANE").toUpperCase();
+    all[tail] = exampleAircraft(saved, { tail, type: "" });
+    acPut(all);
+    saved.acPick = tail;
+  }
+  const keys = Object.keys(acStore());
+  loadAircraft(saved?.acPick && saved.acPick !== AC_NEW ? saved.acPick : keys.length ? keys.sort()[0] : AC_EXAMPLE);
+  let pw = saved?.power;
+  if (/^\d+$/.test(pw || "")) pw += "%"; // older saves: "65" / "75"
+  if (AC.settings.some(x => x.name === pw)) $("#power").value = pw;
+}
+function renderPowerOptions(renamedFrom) {
+  const sel = $("#power"), cur = sel.value;
+  sel.innerHTML = AC.settings.map(x => `<option value="${esc(x.name)}">${esc(x.name || "Unnamed")}${settingComplete(x) ? "" : " (no data)"}</option>`).join("");
+  const want = renamedFrom != null && cur === renamedFrom ? AC.settings[acTab].name : cur;
+  sel.value = AC.settings.some(x => x.name === want) ? want : AC.settings.find(settingComplete)?.name ?? AC.settings[0]?.name ?? "";
+}
+function acStatus(msg) {
+  const el = $("#ac-status");
+  el.classList.toggle("dirty", !msg && acDirty);
+  el.textContent = msg || (acDirty ? "Unsaved changes" : acKey === AC_EXAMPLE ? "Example airplane. Enter your registration, change the figures and save to make your own preset."
+    : acKey === AC_NEW ? "New airplane, not saved yet" : `Saved as ${acKey}`);
+}
+function renderAcEditor() {
+  const all = acStore();
+  $("#acPick").innerHTML = Object.keys(all).sort().map(k => `<option value="${esc(k)}">${esc(k)}${all[k].type ? ` · ${esc(all[k].type)}` : ""}</option>`).join("")
+    + `<option value="${AC_EXAMPLE}">Example: Mooney M20K 231</option><option value="${AC_NEW}">＋ New airplane…</option>`;
+  $("#acPick").value = acKey;
+  for (const el of document.querySelectorAll("[data-ac]")) el.value = AC[el.dataset.ac] ?? "";
+  $("#ps-tabs").innerHTML = AC.settings.map((x, i) => `<button type="button" class="${i === acTab ? "" : "ghost"}" data-act="tab" data-i="${i}" aria-pressed="${i === acTab}">${esc(x.name || "Unnamed")}${settingComplete(x) ? "" : " (empty)"}</button>`).join("")
+    + `<button type="button" class="ghost" data-act="addSetting">＋ Power setting</button>`;
+  const st = AC.settings[acTab];
+  $("#ps-body").hidden = !st;
+  if (st) {
+    $("#ps_name").value = st.name;
+    $("#ps-rows").innerHTML = st.rows.map((r, i) => `<tr>${AC_COLS.map(([k, label, step]) => `<td><input type="number" step="${step}" data-col="${k}" data-r="${i}" value="${r[k] ?? ""}" aria-label="${label}, row ${i + 1}"></td>`).join("")}<td><button type="button" class="ghost icon" data-act="delRow" data-r="${i}" title="Remove this row" aria-label="Remove row ${i + 1}">✕</button></td></tr>`).join("");
+    $("#ps_copy").innerHTML = `<option value="">Copy climb &amp; descent from…</option>` + AC.settings.map((x, i) => (i === acTab ? "" : `<option value="${i}">${esc(x.name || "Unnamed")}</option>`)).join("");
+    $("#ps_copy").hidden = AC.settings.length < 2;
+  }
+  acStatus();
+}
+function acChanged(structural, fromInput) {
+  acDirty = true;
+  if (structural) renderAcEditor(); else acStatus();
+  renderPowerOptions();
+  if (!fromInput) update(); // typing already triggers the form's own update
+}
+// rows from pasted or imported text: Markdown tables, CSV, tab- or space-separated; plus ForeFlight-style extras
+function parseProfileText(text) {
+  const rows = [], extra = {};
+  let section = "";
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/^#+\s*climb/i.test(line)) section = "climb";
+    else if (/^#+\s*descent/i.test(line)) section = "desc";
+    else if (/^#+\s*cruise/i.test(line)) section = "cruise";
+    const ff = line.match(/(low|high) altitude point fuel flow[^|]*\|\s*([\d.]+)/i);
+    if (ff && (section === "climb" || section === "desc")) { extra[`${section === "desc" ? "descGph" : "climbGph"}${ff[1].toLowerCase() === "low" ? "Low" : "High"}`] = +ff[2]; continue; }
+    const ceil = line.match(/max(?:imum)?\s+(?:operating\s+)?(?:ceiling|altitude)[^|]*\|\s*([\d,]+)/i);
+    if (ceil) { extra.ceiling = +ceil[1].replace(/,/g, ""); continue; }
+    const ac = line.match(/\*\*Aircraft:\*\*\s*([A-Z0-9-]{2,8})\s*[·|–-]\s*(.+)$/i);
+    if (ac) { extra.tail = ac[1].toUpperCase(); extra.type = ac[2].trim(); continue; }
+    let cells;
+    if (/[|\t;]/.test(line)) cells = line.replace(/(\d),(\d{3})\b/g, "$1$2").split(/[|\t;]/);
+    else if (!/\s/.test(line)) cells = line.split(",");
+    else cells = line.replace(/(\d),(\d{3})\b/g, "$1$2").split(/[\s,]+/);
+    cells = cells.map(c => c.trim()).filter(Boolean);
+    if (cells.length >= 5 && cells.length <= 7 && cells.every(c => /^-?\d+(\.\d+)?$/.test(c))) {
+      const n = cells.map(Number);
+      rows.push({ alt: n[0], climbIas: n[1], roc: n[2], tas: n[3], gph: n[4], descIas: n[5] ?? null });
+    }
+  }
+  rows.sort((a, b) => a.alt - b.alt);
+  return { rows, extra };
+}
+function applyProfileText(text, from) {
+  const { rows, extra } = parseProfileText(text);
+  if (!rows.length && !Object.keys(extra).length) { acStatus(`No performance rows found in ${from}. Each row needs at least 5 numbers: altitude, climb IAS, rate of climb, cruise TAS, fuel flow.`); return false; }
+  if (acKey === AC_EXAMPLE) { // don't mix the pilot's numbers into the example: start a fresh airplane
+    const name = AC.settings[acTab]?.name;
+    AC = blankAircraft(); acKey = AC_NEW;
+    acTab = Math.max(0, AC.settings.findIndex(x => x.name === name));
+  }
+  if (rows.length) AC.settings[acTab].rows = rows;
+  for (const k of ["climbGphLow", "climbGphHigh", "descGphLow", "descGphHigh", "ceiling"]) if (extra[k] != null) AC[k] = extra[k];
+  if (extra.tail && !AC.tail) AC.tail = extra.tail;
+  if (extra.type && !AC.type) AC.type = extra.type;
+  acChanged(true);
+  acStatus(`Read ${rows.length} rows into ${AC.settings[acTab].name || "this setting"}${Object.keys(extra).length ? " plus the airplane figures found" : ""}. Check them, then press Save preset.`);
+  return true;
+}
+function acSave() {
+  const tail = (AC.tail || "").trim().toUpperCase();
+  if (!tail) { acStatus("Enter the registration, then save."); $("#ac_tail").focus(); return; }
+  const names = AC.settings.map(x => x.name.trim());
+  if (names.some(n => !n) || new Set(names).size !== names.length) { acStatus("Give every power setting its own name."); return; }
+  const all = acStore();
+  if (all[tail] && acKey !== tail && !confirm(`Replace the saved ${tail} preset?`)) return;
+  AC.tail = tail;
+  all[tail] = clone(AC);
+  acPut(all);
+  acKey = tail; acDirty = false;
+  renderAcEditor();
+  update();
+}
+function acDelete() {
+  const all = acStore();
+  if (!all[acKey]) { acStatus("This airplane isn't saved, so there's nothing to delete."); return; }
+  if (!confirm(`Delete the ${acKey} preset from this browser?`)) return;
+  delete all[acKey];
+  acPut(all);
+  loadAircraft(Object.keys(all).sort()[0] || AC_EXAMPLE);
+  update();
+}
+function acExport() {
+  const blob = new Blob([JSON.stringify({ format: "ifr-go-no-go-aircraft", version: 1, aircraft: AC }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${AC.tail || "airplane"}-performance.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function setupAircraftEditor() {
+  const ed = $("#ac-editor");
+  $("#acPick").addEventListener("input", e => {
+    if (acDirty && !confirm("Discard the unsaved changes to this airplane?")) { e.target.value = acKey; return; }
+    loadAircraft(e.target.value);
+  });
+  ed.addEventListener("input", e => {
+    const t = e.target;
+    if (t.dataset.ac) {
+      const k = t.dataset.ac;
+      AC[k] = k === "tail" ? t.value.trim().toUpperCase() : k === "type" ? t.value : num(t.value);
+      acChanged(false, true);
+    } else if (t.dataset.col) {
+      AC.settings[acTab].rows[+t.dataset.r][t.dataset.col] = num(t.value);
+      acChanged(false, true);
+    } else if (t.id === "ps_name") {
+      const old = AC.settings[acTab].name;
+      AC.settings[acTab].name = t.value.trim();
+      $(`#ps-tabs [data-i="${acTab}"]`).textContent = AC.settings[acTab].name || "Unnamed";
+      acDirty = true; acStatus(); renderPowerOptions(old);
+    } else if (t.id === "ps_copy" && t.value !== "") {
+      const src = AC.settings[+t.value], dst = AC.settings[acTab];
+      for (const r of src.rows) {
+        let d = dst.rows.find(x => num(x.alt) === num(r.alt));
+        if (!d) { d = blankRow(num(r.alt)); dst.rows.push(d); }
+        Object.assign(d, { climbIas: r.climbIas, roc: r.roc, descIas: r.descIas });
+      }
+      dst.rows.sort((a, b) => (num(a.alt) ?? 0) - (num(b.alt) ?? 0));
+      acChanged(true, true);
+      acStatus(`Copied the climb and descent columns from ${src.name}.`);
+    }
+  });
+  ed.addEventListener("click", e => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    const st = AC.settings[acTab], act = b.dataset.act;
+    if (act === "tab") { acTab = +b.dataset.i; renderAcEditor(); return; }
+    if (act === "save") return acSave();
+    if (act === "delete") return acDelete();
+    if (act === "export") return acExport();
+    if (act === "import") return $("#ac_file").click();
+    if (act === "pasteApply") { if (applyProfileText($("#ps_paste").value, "the pasted text")) $("#ps_paste").value = ""; return; }
+    if (act === "addSetting") {
+      let n = 1; while (AC.settings.some(x => x.name === `Setting ${n}`)) n++;
+      AC.settings.push({ name: `Setting ${n}`, rows: Array.from({ length: 13 }, (_, i) => blankRow(i * 2000)) });
+      acTab = AC.settings.length - 1;
+    } else if (act === "delSetting") {
+      if (AC.settings.length <= 1) { acStatus("An airplane needs at least one power setting."); return; }
+      if (!confirm(`Delete the ${st.name || "unnamed"} power setting?`)) return;
+      AC.settings.splice(acTab, 1); acTab = Math.max(0, acTab - 1);
+    } else if (act === "addRow") {
+      const last = st.rows.at(-1);
+      st.rows.push(blankRow(last ? (num(last.alt) ?? 0) + 1000 : 0));
+    } else if (act === "delRow") st.rows.splice(+b.dataset.r, 1);
+    else if (act === "fill") {
+      const step = +$("#ps_step").value, top = num(AC.ceiling) || Math.max(24000, ...st.rows.map(r => num(r.alt) || 0));
+      for (let alt = 0; alt <= top; alt += step) if (!st.rows.some(r => num(r.alt) === alt)) st.rows.push(blankRow(alt));
+      st.rows.sort((a, b) => (num(a.alt) ?? 0) - (num(b.alt) ?? 0));
+    } else return;
+    acChanged(true);
+  });
+  $("#ac_file").addEventListener("change", async e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const text = await file.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+    if (data) {
+      const a = data.format === "ifr-go-no-go-aircraft" ? data.aircraft : null;
+      if (!a || !Array.isArray(a.settings)) { acStatus(`${file.name} isn't an IFR Go/No-Go airplane preset.`); return; }
+      if (acDirty && !confirm("Discard the unsaved changes to this airplane?")) return;
+      AC = a; acKey = AC_NEW; acTab = 0;
+      acChanged(true);
+      acStatus(`Loaded ${a.tail || "the airplane"} from ${file.name}. Press Save preset to keep it.`);
+      return;
+    }
+    applyProfileText(text, file.name);
+  });
+}
+
 // ---------- departure time: date picker plus a 24-hour HH:MM field, kept in the hidden #etd ----------
 function parseTime24(v) { // "1430", "14:30", "14.30", "9:05", "9" -> "14:30"; null if not a time
   const m = v.trim().match(/^(\d{1,2})(?:[:.h ]?(\d{2}))?$/);
@@ -1381,13 +1635,13 @@ async function reverseCourse() {
 // ---------- form state ----------
 function readForm() {
   const o = {};
-  for (const el of FORM.elements) if (el.id) o[el.id] = el.type === "checkbox" ? el.checked : el.value;
+  for (const el of FORM.elements) if (el.id && !AC_FIELD_RE.test(el.id)) o[el.id] = el.type === "checkbox" ? el.checked : el.value;
   return o;
 }
 function writeForm(o) {
   for (const [k, v] of Object.entries(o)) {
     const el = document.getElementById(k);
-    if (!el || !FORM.contains(el)) continue;
+    if (!el || !FORM.contains(el) || AC_FIELD_RE.test(k)) continue;
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
   }
 }
@@ -1396,7 +1650,7 @@ function defaults() {
   const etd = new Date(now); etd.setMinutes(0, 0, 0); etd.setHours(etd.getHours() + 2);
   const ago = m => { const d = new Date(now); d.setMonth(d.getMonth() - m); return ymd(d); };
   const ahead = m => ymd(new Date(now.getFullYear(), now.getMonth() + m + 1, 0));
-  return { ...PRESETS.m20k, tail: "N12345", datalink: true, stormscope: true, etd: localInput(etd), currentThru: ahead(3), annual: ago(4), pitot: ago(10), xpdr: ago(10), elt: ago(4), vorCheck: ago(0) };
+  return { datalink: true, stormscope: true, etd: localInput(etd), currentThru: ahead(3), annual: ago(4), pitot: ago(10), xpdr: ago(10), elt: ago(4), vorCheck: ago(0) };
 }
 function update() {
   const f = readForm();
@@ -1413,18 +1667,17 @@ function update() {
   if (saved) {
     if (!saved.etd || new Date(saved.etd) < new Date(Date.now() - 3600e3)) saved.etd = d.etd;
     pendingCharts = { destChart: saved.destChart, depChart: saved.depChart, altChart: saved.altChart };
-    if (!saved.tail) delete saved.tail; // older saves had no airplane: keep the example defaults
     if (saved.datalink === undefined) { delete saved.datalink; delete saved.stormscope; }
     writeForm(saved);
   } else pendingCharts = {};
   etdToFields();
+  initAircraft(saved);
+  setupAircraftEditor();
   let reloadTimer;
   const ALT_HINT = $("#alt-hint").textContent;
   FORM.addEventListener("input", e => {
     const id = e.target.id;
     if (e.target.closest("fieldset")?.querySelector(".example")) store.set(EX_KEY, "1");
-    if (PERF_IDS.includes(id)) $("#preset").value = "custom";
-    if (id === "preset" && PRESETS[e.target.value]) writeForm(PRESETS[e.target.value]);
     if (["destChart", "depChart", "altChart"].includes(id)) chartChosen(id.replace("Chart", ""));
     if (id === "etdDate" || id === "etdTime") fieldsToEtd();
     if (id === "altPick") { if (!e.target.value) return; $("#alt").value = e.target.value; }
