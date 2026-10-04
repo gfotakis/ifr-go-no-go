@@ -37,7 +37,8 @@ Enter your route, departure time, airplane and personal minimums. IFR Go/No-Go p
 - **Alternate requirement and alternate minimums (§91.169).** It shows whether you need an alternate, and lists every airport with a published approach within 100 nm of the destination, nearest first, with its distance and whether its TAF meets alternate minimums at your arrival time.
 - **Fuel (§91.167).** Trip, alternate and 45-minute reserve, from a climb/cruise/descent simulation using your airplane's performance table and forecast winds aloft, plus your own landing reserve.
 - **Along the route.** SIGMETs, convective SIGMETs, G-AIRMETs, PIREPs, freezing level vs. MEA and cruise, model cloud bases and tops.
-- **Instability.** Model CAPE and lifted index along the route at the time you pass each point; the worse of the two decides.
+- **Instability.** Model CAPE and lifted index along the route at the time you pass each point; the worse of the two decides. The route is also checked against the Storm Prediction Center's day 1–3 convective outlook areas.
+- **Flights beyond the TAFs (outlook mode).** When your time at an airport is more than 20 hours out and no TAF covers it, the app switches to forecast guidance from the National Blend of Models. It shows the most likely ceiling and visibility, the chance of IFR, and the chance of thunderstorms and freezing rain, with ceiling and visibility out to 72 hours and thunderstorms, rain and wind out to 8 days. The verdict then reads **OUTLOOK: LOOKS GOOD / MARGINAL / LOOKS BAD**, never GO or NO-GO, and tells you when TAFs should cover your arrival. On the threat map, the current reports (METARs, SIGMETs, G-AIRMETs, PIREPs) are switched off, because they describe now, not your flight.
 - **Pilot and airplane.** IFR currency, recent IMC and time in type, sleep, and inspections (annual, pitot-static, transponder, ELT, VOR check).
 
 It also shows:
@@ -62,7 +63,7 @@ You need **Python 3.8 or newer**. The app uses only Python's standard library, s
    - **Linux:** run `./start-linux.sh`, or `python3 server.py`.
 3. Your browser opens at <http://127.0.0.1:8737>. Leave the window that started it open while you use the app. The **Quit app** button stops it.
 
-The first start downloads airport, runway and navaid data from OurAirports (about 35 MB) and the FAA approach-chart index. They are cached in `~/.cache/ifr-go-no-go/` and refreshed automatically: every week for airports, every 28-day cycle for charts.
+The first start downloads airport, runway and navaid data from OurAirports (about 35 MB) and the FAA approach-chart index. They are cached in `~/.cache/ifr-go-no-go/` and refreshed automatically: every week for airports, every 28-day cycle for charts. The first time you plan a flight beyond the TAFs, the app also downloads the National Blend of Models station bulletins (about 50 MB) and keeps them for a few hours.
 
 Options:
 
@@ -89,6 +90,7 @@ The server listens only on your own computer (127.0.0.1). It isn't meant to be p
 - **US only.** It uses FAA rules, aviationweather.gov and the FAA d-TPP.
 - **Alternate minimums.** The alternate list uses standard alternate minimums (600-2 with an ILS, 800-2 otherwise). It can't see non-standard alternate minimums (the ▲A note on the plate); enter those in the alternate section.
 - **Model data.** Cloud, CAPE, lifted index, freezing level and winds aloft come from the Open-Meteo forecast model. They are estimates, not observations.
+- **Outlooks are not decisions.** Two or three days out, the timing of fronts can be off by hours, and the exact ceiling at one airport is uncertain. The National Blend of Models gives no probability for ceilings below 500 ft, so outlook mode compares your approach minimums with the most likely ceiling and shows the chance of IFR as the risk. Make the go/no-go once TAFs cover your flight.
 - **Not checked.** NOTAMs, TFRs, terrain, airspace and runway closures. Get an official briefing.
 
 ## Data sources
@@ -97,6 +99,9 @@ The server listens only on your own computer (127.0.0.1). It isn't meant to be p
 |---|---|---|
 | [aviationweather.gov](https://aviationweather.gov/data/api/) (NOAA/NWS) | METAR, TAF, PIREP, SIGMET, G-AIRMET, fixes | US government, public domain |
 | [Open-Meteo](https://open-meteo.com/) | Winds aloft, temperature, cloud cover, CAPE, lifted index, freezing level | [CC BY 4.0](https://open-meteo.com/en/license), free for non-commercial use |
+| [National Blend of Models](https://vlab.noaa.gov/web/mdl/nbm) (NOAA, via [NOMADS](https://nomads.ncep.noaa.gov/)) | Outlook mode: ceiling, visibility, IFR, thunderstorm and freezing-rain chances, wind | US government, public domain |
+| [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/) | Backup source for the same NBM guidance | Free service of Iowa State University |
+| [Storm Prediction Center](https://www.spc.noaa.gov/) | Day 1–3 convective outlooks | US government, public domain |
 | [OurAirports](https://ourairports.com/data/) | Airports, runways, navaids | Public domain |
 | [FAA d-TPP](https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/dtpp/) | Instrument approach charts | US government, public domain |
 | [OpenStreetMap](https://www.openstreetmap.org/copyright) | Map tiles | © OpenStreetMap contributors, ODbL |
