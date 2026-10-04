@@ -173,6 +173,12 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
 .ps-tabs button { padding: 5px 14px; }
 .ps-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; justify-content: space-between; margin-top: 10px; }
 .ps-head .f { width: 12rem; }
+.ps-head-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.ps-mini-note { display: none; margin: 0; font-size: 0.85rem; color: var(--muted); flex: 1 1 16rem; align-self: center; }
+#ps-body.min .ps-full { display: none; }
+#ps-body.min .ps-mini-note { display: block; }
+.perf tr.interp td { padding: 8px 10px; color: var(--ink); }
+.perf tr.interp td.v::before { content: "≈ "; color: var(--muted); }
 .ps-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .ps-tools button, .ps-tools select { font-size: 0.85rem; padding: 5px 10px; width: auto; }
 .ps-fill { display: inline-flex; gap: 4px; }
@@ -369,25 +375,29 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
         <div class="ps-tabs" id="ps-tabs" role="group" aria-label="Power settings"></div>
         <div id="ps-body">
           <div class="ps-head">
-            <div class="f"><label for="ps_name">Setting name</label><input id="ps_name" maxlength="24" placeholder="e.g. 75%" autocomplete="off"></div>
-            <button type="button" class="ghost" data-act="delSetting">Delete this setting</button>
+            <div class="f ps-full"><label for="ps_name">Setting name</label><input id="ps_name" maxlength="24" placeholder="e.g. 75%" autocomplete="off"></div>
+            <p class="ps-mini-note" id="ps-mini-note" aria-live="polite"></p>
+            <span class="ps-head-btns">
+              <button type="button" class="ghost ps-full" data-act="delSetting">Delete this setting</button>
+              <button type="button" class="ghost" id="ps_toggle" data-act="toggleMin" aria-controls="ps-rows"></button>
+            </span>
           </div>
           <div class="tbl-wrap perf"><table>
             <thead><tr><th>Pressure alt (ft)</th><th>Climb IAS (kt)</th><th>Rate of climb (fpm)</th><th>Cruise TAS (kt)</th><th>Fuel flow (gph)</th><th>Descent IAS (kt)</th><th><span class="vh">Remove</span></th></tr></thead>
             <tbody id="ps-rows"></tbody>
           </table></div>
-          <div class="ps-tools">
+          <div class="ps-tools ps-full">
             <button type="button" class="ghost" data-act="addRow">＋ Row</button>
             <span class="ps-fill"><button type="button" class="ghost" data-act="fill">Fill altitudes</button><select id="ps_step" aria-label="Altitude step"><option value="1000">every 1,000 ft</option><option value="2000" selected>every 2,000 ft</option></select></span>
             <select id="ps_copy" aria-label="Copy the climb and descent columns from another power setting"></select>
           </div>
-          <details class="ps-paste">
+          <details class="ps-paste ps-full">
             <summary>Paste a table</summary>
             <p class="sub">One row per altitude, with the columns in this order: pressure altitude, climb IAS, rate of climb, cruise TAS, fuel flow, descent IAS (optional). Copy from a spreadsheet, a CSV file or a Markdown table. The rows replace this setting's table.</p>
             <textarea id="ps_paste" rows="6" spellcheck="false" aria-label="Table to paste"></textarea>
             <button type="button" data-act="pasteApply">Use these rows</button>
           </details>
-          <p class="sub" style="margin:8px 0 0">Blank cells are filled in from the rows around them. Climb and descent fuel come from the whole-airplane values, blended from sea level to the maximum altitude.</p>
+          <p class="sub ps-full" style="margin:8px 0 0">Blank cells are filled in from the rows around them. Climb and descent fuel come from the whole-airplane values, blended from sea level to the maximum altitude.</p>
         </div>
         <p class="sub" id="perf-src" style="margin:10px 0 0"></p>
         <div class="checks">

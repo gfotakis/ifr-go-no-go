@@ -976,6 +976,7 @@ function render({ items, ctx }) {
 
   renderProfile(ctx);
   renderAltPicker(ctx);
+  refreshPsMini();
   lastCtx = ctx;
 
   // weather cards
@@ -1350,12 +1351,46 @@ function renderAcEditor() {
   $("#ps-body").hidden = !st;
   if (st) {
     $("#ps_name").value = st.name;
-    $("#ps-rows").innerHTML = st.rows.map((r, i) => `<tr>${AC_COLS.map(([k, label, step]) => `<td><input type="number" step="${step}" data-col="${k}" data-r="${i}" value="${r[k] ?? ""}" aria-label="${label}, row ${i + 1}"></td>`).join("")}<td><button type="button" class="ghost icon" data-act="delRow" data-r="${i}" title="Remove this row" aria-label="Remove row ${i + 1}">✕</button></td></tr>`).join("");
+    renderPsRows();
     $("#ps_copy").innerHTML = `<option value="">Copy climb &amp; descent from…</option>` + AC.settings.map((x, i) => (i === acTab ? "" : `<option value="${i}">${esc(x.name || "Unnamed")}</option>`)).join("");
     $("#ps_copy").hidden = AC.settings.length < 2;
   }
   acStatus();
 }
+// the table, in full or folded to the one line for the planned cruise altitude
+const PS_MIN_KEY = "ifr-gng-perf-min";
+let psMin = store.get(PS_MIN_KEY) === "1", psMiniKey = "";
+const cruiseAlt = () => num($("#cruise").value) ?? 0;
+const psRowHtml = (r, i) => `<tr>${AC_COLS.map(([k, label, step]) => `<td><input type="number" step="${step}" data-col="${k}" data-r="${i}" value="${r[k] ?? ""}" aria-label="${label}, row ${i + 1}"></td>`).join("")}<td><button type="button" class="ghost icon" data-act="delRow" data-r="${i}" title="Remove this row" aria-label="Remove row ${i + 1}">✕</button></td></tr>`;
+function renderPsRows() {
+  const st = AC.settings[acTab];
+  if (!st) return;
+  const alt = cruiseAlt(), note = $("#ps-mini-note"), toggle = $("#ps_toggle");
+  psMiniKey = `${acKey}|${acTab}|${alt}|${st.rows.length}|${psMin}`;
+  $("#ps-body").classList.toggle("min", psMin);
+  toggle.textContent = psMin ? `Show full table (${st.rows.length} rows)` : "Minimize to cruise altitude";
+  toggle.setAttribute("aria-expanded", String(!psMin));
+  if (!psMin) { $("#ps-rows").innerHTML = st.rows.map(psRowHtml).join(""); note.textContent = ""; return; }
+  const i = st.rows.findIndex(r => num(r.alt) === alt);
+  if (i >= 0) { // a row for this altitude: show it, still editable
+    $("#ps-rows").innerHTML = psRowHtml(st.rows[i], i);
+    note.textContent = `${st.name} at your cruise altitude, ${ft(alt)} ft.`;
+    return;
+  }
+  const alts = st.rows.map(r => num(r.alt)).filter(a => a != null).sort((a, b) => a - b);
+  const lo = alts.filter(a => a < alt).at(-1), hi = alts.find(a => a > alt);
+  const col = k => st.rows.filter(r => num(r.alt) != null && num(r[k]) != null).map(r => [num(r.alt), num(r[k])]).sort((x, y) => x[0] - y[0]);
+  const fmt = (k, v) => (v == null ? "—" : k === "gph" ? v.toFixed(1) : String(Math.round(v)));
+  const vals = AC_COLS.map(([k]) => (k === "alt" ? null : interp(col(k), alt)));
+  $("#ps-rows").innerHTML = `<tr class="interp">${AC_COLS.map(([k], j) => `<td${k !== "alt" && vals[j] != null ? ' class="v"' : ""}>${k === "alt" ? ft(alt) : fmt(k, vals[j])}</td>`).join("")}<td></td></tr>`;
+  note.textContent = vals.every(v => v == null) ? `${st.name} has no figures yet. Show the full table to fill it in.`
+    : `${st.name} at your cruise altitude, ${ft(alt)} ft. There's no row for it, so these values are interpolated${lo != null && hi != null ? ` between ${ft(lo)} and ${ft(hi)} ft` : " from the nearest row"}. Show the full table to edit.`;
+}
+function refreshPsMini() { // the folded line follows the cruise altitude
+  const st = AC?.settings[acTab];
+  if (psMin && st && `${acKey}|${acTab}|${cruiseAlt()}|${st.rows.length}|${psMin}` !== psMiniKey) renderPsRows();
+}
+
 function acChanged(structural, fromInput) {
   acDirty = true;
   if (structural) renderAcEditor(); else acStatus();
@@ -1474,6 +1509,7 @@ function setupAircraftEditor() {
     if (!b) return;
     const st = AC.settings[acTab], act = b.dataset.act;
     if (act === "tab") { acTab = +b.dataset.i; renderAcEditor(); return; }
+    if (act === "toggleMin") { psMin = !psMin; store.set(PS_MIN_KEY, psMin ? "1" : "0"); renderPsRows(); return; }
     if (act === "save") return acSave();
     if (act === "delete") return acDelete();
     if (act === "export") return acExport();
