@@ -15,7 +15,7 @@ You enter your route, departure time, airplane and personal minimums. It pulls c
 
 It's free and open source and runs on your own computer: Windows, Mac or Linux, with only Python needed.
 
-**Download:** [v1.0 release](https://github.com/gfotakis/ifr-go-no-go/releases/tag/v1.0). [Running it](#running-it) below explains how to start it.
+**Download:** [latest release](https://github.com/gfotakis/ifr-go-no-go/releases/latest). [Running it](#running-it) below explains how to start it.
 
 It's a decision aid, not a briefing, so you still need the official briefing, NOTAMs and TFRs. US/FAA only for now. If you try it, I'd love to hear what's missing or what it gets wrong. Tell me in the [announcement discussion](https://github.com/gfotakis/ifr-go-no-go/discussions/1).
 
@@ -56,7 +56,7 @@ Your settings and personal minimums are saved in your browser. Nothing about you
 
 You need **Python 3.8 or newer**. The app uses only Python's standard library, so there is nothing else to install.
 
-1. Download the latest release (**Code → Download ZIP**) and unzip it, or `git clone` this repository.
+1. Open the [latest release](https://github.com/gfotakis/ifr-go-no-go/releases/latest), download **Source code (zip)** under **Assets** and unzip it, or `git clone` this repository.
 2. Start it:
    - **Windows:** double-click `start-windows.bat`. If Python isn't installed, get it from [python.org](https://www.python.org/downloads/) and tick "Add python.exe to PATH" during setup.
    - **Mac:** double-click `start-mac.command`. The first time, macOS may block it: right-click it, choose **Open**, then **Open** again.
