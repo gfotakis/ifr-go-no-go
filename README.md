@@ -1,5 +1,28 @@
 # IFR Go/No-Go
 
+## A note from the author
+
+I've been building a preflight go/no-go app for IFR flights, and it's at the point where I'd like other pilots to try it.
+
+You enter your route, departure time, airplane and personal minimums. It pulls current METARs, TAFs, SIGMETs, G-AIRMETs, PIREPs and model data, then gives a **GO / CAUTION / NO-GO** verdict with the reason for every point. Among other things, it:
+
+- Checks the weather against your approach minimums plus your own margins, including crosswind and gusts.
+- Tells you whether you need an alternate (§91.169), and lists alternates within 100 nm with their distance and whether their forecast meets alternate minimums.
+- Works out fuel (§91.167) with forecast winds aloft.
+- Flags icing, convection (CAPE and lifted index) and freezing level along the route.
+- Shows a threat map and a zoomable vertical profile of clouds and freezing level.
+- Has a one-click Reverse for the trip home.
+
+It's free and open source and runs on your own computer: Windows, Mac or Linux, with only Python needed.
+
+**Download:** [v1.0 release](https://github.com/gfotakis/ifr-go-no-go/releases/tag/v1.0). [Running it](#running-it) below explains how to start it.
+
+It's a decision aid, not a briefing, so you still need the official briefing, NOTAMs and TFRs. US/FAA only for now. If you try it, I'd love to hear what's missing or what it gets wrong. Tell me in the [announcement discussion](https://github.com/gfotakis/ifr-go-no-go/discussions/1).
+
+---
+
+## About
+
 A preflight go/no-go decision aid for instrument pilots flying under FAA Part 91.
 
 Enter your route, departure time, airplane and personal minimums. IFR Go/No-Go pulls the current weather and forecasts, checks the flight against the regulations and your own limits, and gives a **GO / CAUTION / NO-GO** verdict with the reason for every point.
