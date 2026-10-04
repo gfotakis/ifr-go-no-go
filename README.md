@@ -80,6 +80,7 @@ The server listens only on your own computer (127.0.0.1). It isn't meant to be p
    - Choose **＋ New airplane…** and enter the registration and type.
    - Fill in the whole-airplane figures: usable and taxi fuel, maximum altitude, demonstrated crosswind, climb and descent fuel flow, and descent rate.
    - For each power setting (75% and 65% to start; **＋ Power setting** adds more), fill in the table: pressure altitude, climb IAS, rate of climb, cruise TAS, fuel flow and descent IAS. You can type it, paste it from a spreadsheet, or use **Import file…** for a CSV or Markdown table, such as a write-up of your ForeFlight performance profile. Blank cells are filled in from the rows around them.
+   - **Minimize to cruise altitude** folds the table to the one line for your planned cruise altitude; **Show full table** brings it back.
    - Press **Save preset**. Your presets stay in this browser; **Export** saves one to a file you can import on another computer.
 3. Enter the route as departure, fixes or navaids, and destination, separated by spaces, e.g. `KAEX PICAN 0R1`. Airways and SIDs/STARs aren't expanded yet, so list their fixes.
 
