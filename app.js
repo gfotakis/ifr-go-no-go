@@ -29,7 +29,13 @@ const num = v => (v === "" || v == null || Number.isNaN(Number(v)) ? null : Numb
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtZ = d => d.toISOString().slice(11, 16) + "Z";
 const fmtLocal = d => d.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-const fmtCig = c => (c == null ? "n/a" : c === Infinity ? "none" : `${Math.round(c).toLocaleString()} ft`);
+const fmtCig = c => (c == null ? "n/a" : c === Infinity ? "no ceiling" : `${Math.round(c).toLocaleString()} ft`);
+// ceiling of a forecast summary, naming the layers when there is no ceiling ("no ceiling (FEW040)", "clear (SKC)")
+const cigDesc = t => {
+  if (t?.cig !== Infinity) return fmtCig(t?.cig);
+  if (t.low) return `no ceiling (${t.low.cover}${String(Math.round(t.low.base / 100)).padStart(3, "0")})`;
+  return t.clear ? `clear (${t.clear})` : "no ceiling";
+};
 const fmtVis = v => (v == null ? "n/a" : `${v >= 6 ? "6+" : +v.toFixed(2)} SM`);
 const fmtHM = min => { const m = Math.round(min); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`; };
 const ft = n => Math.round(n).toLocaleString();
@@ -104,10 +110,14 @@ function category(cig, vis) {
   if (c <= 3000 || v <= 5) return "MVFR";
   return "VFR";
 }
-function blankSum() { return { cig: null, vis: null, wspd: 0, gust: 0, winds: [], wx: [], rows: 0 }; }
+function blankSum() { return { cig: null, vis: null, low: null, clear: null, wspd: 0, gust: 0, winds: [], wx: [], rows: 0 }; }
 function absorb(t, row, fullReplace) {
   const c = ceilingOf(row, fullReplace);
   if (c != null) t.cig = t.cig == null ? c : Math.min(t.cig, c);
+  for (const l of Array.isArray(row.clouds) ? row.clouds : []) {
+    if (["FEW", "SCT"].includes(l.cover) && l.base != null && (!t.low || l.base < t.low.base)) t.low = { cover: l.cover, base: l.base };
+    if (["SKC", "CLR", "NSC", "NCD", "CAVOK"].includes(l.cover)) t.clear = l.cover;
+  }
   const v = parseVis(row.visib);
   if (v != null) t.vis = t.vis == null ? v : Math.min(t.vis, v);
   if (row.wspd != null) t.wspd = Math.max(t.wspd, row.wspd);
@@ -143,7 +153,8 @@ function metarSum(m) {
 function worst(a, b) {
   if (!a) return b; if (!b) return a;
   const pick = (x, y) => (x == null ? y : y == null ? x : Math.min(x, y));
-  return { cig: pick(a.cig, b.cig), vis: pick(a.vis, b.vis), wspd: Math.max(a.wspd, b.wspd), gust: Math.max(a.gust, b.gust),
+  const low = !a.low ? b.low : !b.low ? a.low : a.low.base <= b.low.base ? a.low : b.low;
+  return { cig: pick(a.cig, b.cig), vis: pick(a.vis, b.vis), low, clear: a.clear || b.clear, wspd: Math.max(a.wspd, b.wspd), gust: Math.max(a.gust, b.gust),
     winds: a.winds.concat(b.winds), wx: a.wx.concat(b.wx), rows: a.rows + b.rows };
 }
 function maxCrosswind(winds, runways) {
@@ -336,16 +347,23 @@ async function getJSON(path, params) {
 }
 const wx = (product, params) => getJSON(`/wx/${product}`, { format: "json", ...params });
 
-async function nearestStation(product, pt, maxNm) {
+// nearest station within maxNm; for TAFs given a time `at`, the nearest one whose latest issue is valid then
+// (a closer TAF that has already run out by `at` is no use), else the nearest one at all
+async function nearestStation(product, pt, maxNm, at) {
   const r = maxNm / 60;
   const box = [pt.lat - r, pt.lon - r * 1.2, pt.lat + r, pt.lon + r * 1.2].map(n => n.toFixed(3)).join(",");
   const rows = await wx(product, { bbox: box }).catch(() => []);
-  let best = null;
+  const latest = id => rows.filter(t => t.icaoId === id).sort((a, b) => b.issueTime.localeCompare(a.issueTime))[0];
+  const valid = t => at == null || (t.validTimeFrom * 1000 <= at && t.validTimeTo * 1000 > at);
+  let best = null, bestValid = null;
   for (const row of rows) {
     const d = gcNm(pt, { lat: row.lat, lon: row.lon });
-    if (d <= maxNm && (!best || d < best.d)) best = { row, d };
+    if (d > maxNm) continue;
+    if (!best || d < best.d) best = { row, d };
+    if (product === "taf" && (!bestValid || d < bestValid.d) && valid(latest(row.icaoId))) bestValid = { row, d };
   }
-  if (best && product === "taf") best.row = rows.filter(t => t.icaoId === best.row.icaoId).sort((a, b) => b.issueTime.localeCompare(a.issueTime))[0];
+  if (product === "taf" && bestValid) best = bestValid;
+  if (best && product === "taf") best.row = latest(best.row.icaoId);
   return best;
 }
 
@@ -437,7 +455,7 @@ async function loadAll() {
       const rec = { pt: a, wxId: id,
         metar: metars.find(m => m.icaoId === id) || null,
         taf: tafs.filter(t => t.icaoId === id).sort((x, y) => y.issueTime.localeCompare(x.issueTime))[0] || null };
-      if (!rec.taf) { const n = await nearestStation("taf", a, 50); if (n) { rec.taf = n.row; rec.tafProxy = { id: n.row.icaoId, d: Math.round(n.d) }; } }
+      if (!rec.taf) { const n = await nearestStation("taf", a, 50, a === dep ? etdMs + 1800e3 : etdMs + dist / 140 * 3600e3); if (n) { rec.taf = n.row; rec.tafProxy = { id: n.row.icaoId, d: Math.round(n.d) }; } }
       if (!rec.metar) { const n = await nearestStation("metar", a, 30); if (n) { rec.metar = n.row; rec.metarProxy = { id: n.row.icaoId, d: Math.round(n.d) }; } }
       apt[a.token] = rec;
     }));
@@ -658,6 +676,7 @@ function evaluate(f) {
       windChecks(add, f, P, depId, depO.prev, null, dep.runways);
     } else {
     if (depA.tafProxy) add("caution", "Weather", `${depId} has no TAF; departure forecast taken from ${depA.tafProxy.id}, ${depA.tafProxy.d} nm away.`, "§91.103", 1);
+    if (depA.taf && !depW.prev.rows && !depNow) add("caution", "Weather", `The ${depA.taf.icaoId} TAF doesn't reach your departure time. Re-check when the next TAF is issued.`, "§91.103", 2);
     else if (!depA.taf && !depNow) add("caution", "Weather", `No TAF at or near ${depId}. Use the GFA to judge departure weather.`, "§91.103", 2);
     if (depPrev.cig != null || depPrev.vis != null) {
       const cig = depPrev.cig ?? Infinity, vis = depPrev.vis ?? 99;
@@ -1133,8 +1152,8 @@ function render({ items, ctx }) {
       <div class="name">${esc(c.a?.pt?.name || "")}${c.a?.pt ? ` · ${c.a.pt.elevFt} ft` : ""}${proxy ? `<br><span style="color:var(--caution)">${esc(proxy)}</span>` : ""}</div>
       <dl class="kv">
         <dt>Window</dt><dd>${fmtZ(c.win[0])}–${fmtZ(c.win[1])}</dd>
-        <dt>Worst forecast</dt><dd>${c.a?.taf ? `${fmtCig(c.prev?.cig)} / ${fmtVis(c.prev?.vis)}` : c.prev?.rows ? `METAR ${fmtCig(c.prev.cig)} / ${fmtVis(c.prev.vis)}` : "No TAF"}</dd>
-        ${cond?.rows ? `<dt>TEMPO/PROB</dt><dd>${fmtCig(cond.cig)} / ${fmtVis(cond.vis)}${cond.wx.length ? " " + esc(cond.wx.join(" ")) : ""}</dd>` : ""}
+        <dt>Worst forecast</dt><dd>${c.a?.taf ? (c.prev?.rows ? `${cigDesc(c.prev)} / ${fmtVis(c.prev?.vis)}` : `TAF ${esc(c.a.taf.icaoId)} ends before this window`) : c.prev?.rows ? `METAR ${cigDesc(c.prev)} / ${fmtVis(c.prev.vis)}` : "No TAF"}</dd>
+        ${cond?.rows ? `<dt>TEMPO/PROB</dt><dd>${cigDesc(cond)} / ${fmtVis(cond.vis)}${cond.wx.length ? " " + esc(cond.wx.join(" ")) : ""}</dd>` : ""}
         <dt>Wind</dt><dd>${c.prev ? `${c.prev.wspd} kt${c.prev.gust ? " G" + c.prev.gust : ""}` : "n/a"}${xw != null ? ` · xwind ${xw}` : ""}</dd>
       </dl>
       ${m ? `<pre class="raw">${esc(m.rawOb)}</pre>` : ""}
@@ -1788,10 +1807,11 @@ function nbeWindow(st, from, to) {
   }
   return { kind: "nbe", prev: sum, cond: blankSum(), covered: true, ts: Math.max(0, ...rows.map(r => r.T12 ?? 0)), pop: Math.max(0, ...rows.map(r => r.P12 ?? 0)), pzr: Math.max(0, ...rows.map(r => r.PZR ?? 0)) };
 }
-// guidance for one airport and window, or null when its TAF covers it (or it's close enough to wait for one)
+// guidance for one airport and window, or null when its TAF covers the window's middle (or it's close enough to wait for one)
 function outlookFor(pt, rec, win) {
   if (!pt || leadH(win[0]) <= OUTLOOK_AFTER_H) return null;
-  if (rec?.taf && tafWindow(rec.taf, ...win).covered) return null;
+  const mid = (+win[0] + +win[1]) / 2; // a TAF that covers the middle of the window (ETA for the destination) is used, not guidance
+  if (rec?.taf && rec.taf.validTimeFrom * 1000 <= mid && rec.taf.validTimeTo * 1000 > mid) return null;
   const id = nbmId(pt);
   const o = nbmWindow(W.nbm?.nbs?.stations?.[id], ...win) || nbeWindow(W.nbm?.nbe?.stations?.[id], ...win);
   if (o) return { ...o, id, cycle: (o.kind === "nbs" ? W.nbm.nbs : W.nbm.nbe).cycle, source: (o.kind === "nbs" ? W.nbm.nbs : W.nbm.nbe).source };
