@@ -11,7 +11,7 @@ You enter your route, departure time, airplane and personal minimums. It pulls c
 - Works out fuel (§91.167) with forecast winds aloft.
 - Flags icing, convection (CAPE and lifted index) and freezing level along the route.
 - Shows a threat map and a zoomable vertical profile of clouds and freezing level.
-- Has a one-click Reverse for the trip home.
+- Plans the return too: tick a box, set the return date, and both legs get their own go/no-go.
 
 It's free and open source and runs on your own computer: Windows, Mac or Linux, with only Python needed.
 
@@ -45,9 +45,11 @@ It also shows:
 
 - **A threat map** with SIGMETs, G-AIRMETs, PIREPs, METAR flight categories, model CAPE and cloud bases and tops.
 - **A vertical profile** of model clouds, freezing level, CAPE and lifted index along your flight path. You can zoom and pan it.
+- **An Enlarge button** on the threat map and the vertical profile that fills the window, for easier reading.
 - **Leg-by-leg winds, groundspeed, time and fuel.**
 - **Links to the current approach plates** from the FAA d-TPP.
 - **A Reverse button** that flies the route the other way, swaps the approaches and picks a new alternate.
+- **Round trips.** Tick "Plan the return too" and set the return date and time. Tabs above the decision show both legs' results side by side; click one to see its checks, map and profile. The return starts as your route flown back with the approaches swapped and an alternate picked near home, and keeps its own alternate, fuel and altitudes.
 - **Airplane presets saved by registration**, with a ForeFlight-style performance table for each power setting (75%, 65% and any others you add).
 
 Your settings and personal minimums are saved in your browser. Nothing about you or your flight is uploaded anywhere; the app only downloads weather, charts, map tiles and fonts.

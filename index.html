@@ -31,9 +31,9 @@
   --outlook: #6a4fc2;
   --outlook-bg: #f3f0fb;
   --outlook-ink: #ffffff;
-  --li1: #9fb4e8;
-  --li2: #7b5cd6;
-  --li3: #6a1fa0;
+  --li1: #f2a39b;
+  --li2: #d9483b;
+  --li3: #8c1a12;
   --f-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
   --f-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
   --f-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
@@ -46,7 +46,7 @@
     --go-bg: #15301f; --caution-bg: #33270f; --stop-bg: #3a1a18;
     --cloud: #c3cdd5; --fzl: #6fb3f2; --cape1: #e8c547; --cape2: #f0974a; --cape3: #f06b5f;
     --outlook: #a58cf0; --outlook-bg: #1c1a2c; --outlook-ink: #17112b;
-    --li1: #7f95d6; --li2: #9b78f0; --li3: #c45ce8;
+    --li1: #8a3d37; --li2: #d9514a; --li3: #ff8f85;
     color-scheme: dark;
   }
 }
@@ -76,6 +76,21 @@ input.icao { font-family: var(--f-data); text-transform: uppercase; font-weight:
 input[type="number"] { font-family: var(--f-data); font-variant-numeric: tabular-nums; }
 input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .checks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.trip { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 16px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.ret-when { flex: 1 1 320px; max-width: 480px; display: grid; grid-template-columns: minmax(0, 1fr) 10.5em; gap: 6px 12px; }
+.ret-when[hidden] { display: none; }
+.ret-when .hint { grid-column: 1 / -1; font-size: 0.76rem; color: var(--muted); }
+.legtabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.legtabs[hidden] { display: none; }
+.legtab { display: grid; gap: 2px; text-align: left; padding: 9px 12px; border-radius: 10px; border: 2px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; }
+.legtab[aria-selected="true"] { border-color: var(--accent); background: var(--inset); box-shadow: inset 0 -3px 0 var(--accent); }
+.legtab .lt-name { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+.legtab .lt-word { font: 700 1.5rem/1 var(--f-display); letter-spacing: 0.03em; }
+.legtab .lt-sub { font: 0.75rem var(--f-data); color: var(--muted); }
+.legtab.go .lt-word, .legtab.o-good .lt-word { color: var(--go); }
+.legtab.caution .lt-word, .legtab.o-marginal .lt-word { color: var(--caution); }
+.legtab.stop .lt-word, .legtab.o-bad .lt-word { color: var(--stop); }
+.legtab.outlook .lt-word { font-size: 1.2rem; }
 .chk { display: inline-flex; align-items: center; gap: 7px; background: var(--inset); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px 5px 9px; cursor: pointer; font-size: 0.9rem; user-select: none; }
 .chk input { width: auto; margin: 0; accent-color: var(--accent); }
 .chk.bad:has(input:checked) { border-color: var(--stop); background: var(--stop-bg); }
@@ -174,6 +189,7 @@ input#route { font: 600 1.05rem var(--f-data); text-transform: uppercase; letter
 .route-in { display: flex; gap: 8px; align-items: stretch; }
 .route-in input { flex: 1; min-width: 0; }
 .route-in button { white-space: nowrap; }
+.route-in button:disabled { opacity: 0.45; cursor: not-allowed; }
 .alt-in { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: 6px; }
 .alt-in select { font-family: var(--f-data); font-size: 0.85rem; }
 @media (min-width: 700px) { .alt-f { grid-column: span 2; } }
@@ -223,6 +239,15 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
 .plate { font-size: 0.82rem; color: var(--accent); }
 @media (max-width: 560px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 #map { height: 500px; border-radius: 10px; border: 1px solid var(--line); background: var(--inset); z-index: 0; }
+/* Enlarge: the threat map or vertical profile fills the window */
+.card h2 .enlarge { float: right; font: 600 0.8rem var(--f-body); letter-spacing: 0; text-transform: none; padding: 4px 10px; margin: -2px 0 0 10px; }
+body.enlarged { overflow: hidden; }
+body.enlarged::before { content: ""; position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); z-index: 1999; }
+.card.expanded { position: fixed; inset: 12px; z-index: 2000; overflow: auto; display: flex; flex-direction: column; box-shadow: 0 12px 48px rgb(0 0 0 / 0.4); }
+.card.expanded h2 { font-size: 1.3rem; }
+.card.expanded #map { flex: 1 1 auto; height: auto; min-height: 320px; }
+.card.expanded .leaflet-container { font-size: 15px; }
+.card.expanded #profile svg { width: min(100%, calc((100vh - 210px) * 1000 / 380)); margin: 0 auto; }
 .leaflet-container { font: 13px var(--f-body); }
 .card.outlook-card { border-style: dashed; border-color: var(--outlook); }
 .view-banner { background: var(--outlook); color: var(--outlook-ink); font-weight: 600; font-size: 0.9rem; line-height: 1.4; padding: 9px 14px; border-radius: 10px 10px 0 0; }
@@ -259,7 +284,7 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>IFR <span>Go/No-Go</span> <small class="ver">v1.2.02</small></h1>
+      <h1>IFR <span>Go/No-Go</span> <small class="ver">v1.3</small></h1>
       <div class="sub">Preflight decision model · FAA Part 91 · weather from aviationweather.gov and Open-Meteo · plates from FAA d-TPP</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -311,6 +336,14 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
           <label class="chk"><input type="checkbox" id="inClouds" checked> Expect to be in cloud en route</label>
           <label class="chk"><input type="checkbox" id="mountains"> Mountainous terrain</label>
         </div>
+        <div class="trip">
+          <label class="chk"><input type="checkbox" id="roundTrip"> Plan the return too</label>
+          <div class="ret-when" id="ret-when" hidden>
+            <div class="f"><label for="retDate">Return departure (local, 24 h)</label><div class="etd-in"><input id="retDate" type="date"><input id="retTime" class="time24" inputmode="numeric" maxlength="5" placeholder="HH:MM" autocomplete="off" aria-label="Return departure time, 24-hour"></div></div>
+            <div class="f"><label for="retAlt">Return alternate</label><input id="retAlt" class="icao" maxlength="4" aria-label="Alternate airport for the return"></div>
+            <span class="hint">The return flies the route back with the approaches swapped, and picks an alternate near home until you set one. Switch with the tabs above the decision; each leg keeps its own alternate, fuel and altitudes.</span>
+          </div>
+        </div>
       </fieldset>
 
       <section class="card">
@@ -321,7 +354,7 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
       </section>
 
       <section class="card" id="map-card">
-        <h2>Threat map <small id="map-when"></small></h2>
+        <h2>Threat map <small id="map-when"></small><button type="button" class="ghost enlarge" data-enlarge aria-expanded="false" title="Show this larger (Esc closes)">⤢ Enlarge</button></h2>
         <div class="view-banner" id="map-outlook" role="note" hidden></div>
         <div id="map" role="region" aria-label="Map of the route and weather hazards"></div>
         <div class="map-legend" id="map-legend"></div>
@@ -329,7 +362,7 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
       </section>
 
       <section class="card">
-        <h2>Vertical profile <small>Model clouds, freezing level, CAPE and lifted index along the route at your passing time</small></h2>
+        <h2>Vertical profile <small>Model clouds, freezing level, CAPE and lifted index along the route at your passing time</small><button type="button" class="ghost enlarge" data-enlarge aria-expanded="false" title="Show this larger (Esc closes)">⤢ Enlarge</button></h2>
         <div class="pz-tools" id="pz-tools">
           <span class="pz-grp"><span class="pz-l">Distance</span><button type="button" class="ghost" data-pz="x-">−</button><button type="button" class="ghost" data-pz="x+">+</button></span>
           <span class="pz-grp"><span class="pz-l">Altitude</span><button type="button" class="ghost" data-pz="y-">−</button><button type="button" class="ghost" data-pz="y+">+</button></span>
@@ -517,6 +550,10 @@ tfoot td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--line)
     </form>
 
     <aside class="verdict-col pane" aria-label="Decision">
+      <div class="legtabs" id="legtabs" role="tablist" aria-label="Trip legs" hidden>
+        <button type="button" role="tab" class="legtab" data-leg="out"><span class="lt-name">Outbound</span><span class="lt-word">—</span><span class="lt-sub"></span></button>
+        <button type="button" role="tab" class="legtab" data-leg="ret"><span class="lt-name">Return</span><span class="lt-word">—</span><span class="lt-sub"></span></button>
+      </div>
       <div class="verdict" id="verdict" aria-live="polite">
         <div class="lbl">Decision</div>
         <div class="word">—</div>

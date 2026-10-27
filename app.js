@@ -324,7 +324,14 @@ function timeAtAlong(timelines, along) {
 }
 
 // ---------- data loading ----------
-let W = { route: null, apt: {}, charts: {}, pireps: [], sigmets: [], gairmets: [], om: [], loadedAt: null, error: null, loading: false };
+const blankW = () => ({ route: null, apt: {}, charts: {}, pireps: [], sigmets: [], gairmets: [], om: [], loadedAt: null, error: null, loading: false });
+let W = blankW();
+// Round trip: the form shows one leg at a time. The other leg's own fields wait in `legs`, its weather in `WL`.
+const RET_KEY = "ifr-gng-return-v1";
+const LEG_FIELDS = ["route", "alt", "etd", "fuelGal", "cruise", "power", "altCruise", "mea", "night", "inClouds", "mountains",
+  "destChart", "destAppr", "destMinCig", "destMinVis", "depChart", "depMinCig", "depMinVis", "altChart", "altType", "altNonCig", "altNonVis"];
+let leg = "out";
+const legs = { out: null, ret: null }, WL = { out: null, ret: null };
 let pendingCharts = null; // saved approach choices, applied once the lists arrive
 let refreshTimer = null;
 
@@ -367,21 +374,30 @@ async function nearestStation(product, pt, maxNm, at) {
   return best;
 }
 
-let loadSeq = 0;
+const loadSeq = { out: 0, ret: 0 };
+// loads the active leg, then the other one quietly when a return is planned
 async function loadAll() {
-  const seq = ++loadSeq;
-  const f = readForm();
-  W.loading = true;
-  $("#wx-status").textContent = "Resolving route…";
-  document.body.classList.add("loading");
+  const other = leg === "out" ? "ret" : "out";
+  await loadLeg(leg);
+  if ($("#roundTrip").checked && legs[other]) await loadLeg(other);
+}
+async function loadLeg(which) {
+  const seq = ++loadSeq[which];
+  const f = legForm(which);
+  const live = () => which === leg; // the pilot may switch tabs while this loads
+  if (live()) {
+    W.loading = true;
+    $("#wx-status").textContent = "Resolving route…";
+    document.body.classList.add("loading");
+  }
   try {
     if (location.protocol === "file:") throw new Error("file");
-    const slow = setTimeout(() => { $("#wx-status").textContent = "Downloading route data (first run only, about 35 MB)…"; }, 2500);
+    const slow = setTimeout(() => { if (live()) $("#wx-status").textContent = "Downloading route data (first run only, about 35 MB)…"; }, 2500);
     const [route, altRes] = await Promise.all([
       getJSON("/nav/route", { q: f.route }),
       f.alt.trim() ? getJSON("/nav/route", { q: f.alt.trim() }) : Promise.resolve(null),
     ]).finally(() => clearTimeout(slow));
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq[which]) return;
     const altPt = altRes?.points?.[0]?.kind === "airport" ? altRes.points[0] : null;
     const errors = [...route.errors, ...(f.alt.trim() && !altPt ? [`Alternate ${f.alt.trim().toUpperCase()} wasn't found as an airport.`] : [])];
     const pts = route.points;
@@ -389,7 +405,7 @@ async function loadAll() {
     const dest = pts.length > 1 && pts.at(-1).kind === "airport" ? pts.at(-1) : null;
     const airports = [dep, dest, altPt].filter(Boolean);
 
-    $("#wx-status").textContent = "Loading weather…";
+    if (live()) $("#wx-status").textContent = "Loading weather…";
     const ids = [...new Set(airports.map(a => a.icao || a.ident))];
     const etd = new Date(f.etd);
     const etdMs = Number.isNaN(+etd) ? Date.now() : +etd;
@@ -447,7 +463,7 @@ async function loadAll() {
       omSamples.length ? omFetch(omUrl) : [],
       ...[dep, dest, altPt].map(a => (a ? getJSON("/nav/approaches", { apt: a.faa || a.ident }).catch(() => ({ charts: [] })) : Promise.resolve({ charts: [] }))),
     ]);
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq[which]) return;
 
     const apt = {};
     await Promise.all(airports.map(async a => {
@@ -475,28 +491,32 @@ async function loadAll() {
     const spc = leadH(etdMs) < 84 ? (await Promise.all([1, 2, 3].map(d => getJSON("/spc", { day: d }).catch(() => null)))).filter(Boolean) : [];
     const pirepIds = [...new Set([dep, dest].filter(Boolean).map(a => apt[a.token].metar?.icaoId || apt[a.token].wxId))];
     const pireps = (await Promise.all(pirepIds.map(id => wx("pirep", { id, distance: 100, age: 3 }).catch(() => [])))).flat();
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq[which]) return;
     const seen = new Set();
     const omList = Array.isArray(om) ? om : om?.error ? [] : [om];
 
-    W = { route: { ...route, errors }, dep, dest, altPt, apt, sigmets, gairmets,
+    WL[which] = { route: { ...route, errors }, dep, dest, altPt, apt, sigmets, gairmets,
       charts: { dep: charts[0], dest: charts[1], alt: charts[2] },
       pireps: pireps.filter(p => !seen.has(p.rawOb) && seen.add(p.rawOb)),
       om: omList.map((o, i) => ({ ...omSamples[i], hourly: o.hourly })), omError: om?.error || null,
       areaMetars, grid: gridCells, gridTime: midHour, gridError: gridData?.error || null, box, altCands, nbm, nbmError, spc,
       loadedAt: new Date(), error: null, loading: false };
-    fillCharts();
-    renderMap();
-    $("#wx-status").textContent = "Updated " + W.loadedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    if (live()) {
+      W = WL[which];
+      fillCharts();
+      renderMap();
+      $("#wx-status").textContent = "Updated " + W.loadedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    }
   } catch (err) {
-    if (seq !== loadSeq) return;
-    W.loading = false;
-    W.error = err.message === "file"
+    if (seq !== loadSeq[which]) return;
+    const w = live() ? W : (WL[which] = WL[which] || blankW());
+    w.loading = false;
+    w.error = err.message === "file"
       ? "This page needs its local server. Run  python3 ~/ifr-go-no-go/server.py  and use the address it prints."
       : `Couldn't load data: ${err.message}. Check the internet connection and press Refresh weather.`;
-    $("#wx-status").textContent = "Data unavailable";
+    if (live()) $("#wx-status").textContent = "Data unavailable";
   } finally {
-    if (seq === loadSeq) { document.body.classList.remove("loading"); update(); }
+    if (seq === loadSeq[which]) { if (live()) document.body.classList.remove("loading"); update(); }
   }
 }
 
@@ -1059,7 +1079,7 @@ function compTxt(head) {
   return v > 0 ? `<span class="head">${v} head</span>` : v < 0 ? `<span class="tail">${-v} tail</span>` : "calm";
 }
 
-function render({ items, ctx }) {
+function verdictOf({ items, ctx }, w = W) {
   const by = l => items.filter(i => i.level === l).sort((a, b) => AREA_ORDER.indexOf(a.area) - AREA_ORDER.indexOf(b.area));
   const stops = by("stop"), cautions = by("caution").sort((a, b) => b.pts - a.pts), oks = by("ok").concat(by("info"));
   const score = cautions.reduce((s, i) => s + i.pts, 0);
@@ -1074,7 +1094,12 @@ function render({ items, ctx }) {
     word = bad ? "LOOKS BAD" : cautions.length ? "MARGINAL" : "LOOKS GOOD";
     why = `Outlook, ${o.lead} h ahead: forecast guidance${o.cycle ? ` (NBM ${o.cycle.slice(11, 13)}Z${o.source === "IEM" ? " via IEM" : ""})` : ""}, not TAFs. TAFs should cover your arrival from about ${fmtLocal(o.tafFrom)}; re-check then for the go/no-go.`;
   }
-  if (W.loading && !W.loadedAt) { cls = ""; word = "—"; why = "Loading route and weather…"; }
+  if (w.loading && !w.loadedAt) { cls = ""; word = "—"; why = "Loading route and weather…"; }
+  return { stops, cautions, oks, score, cls, word, why };
+}
+function render(res) {
+  const { ctx } = res;
+  const { stops, cautions, oks, score, cls, word, why } = verdictOf(res);
 
   const v = $("#verdict");
   v.className = "verdict " + cls;
@@ -1890,6 +1915,7 @@ function bestAlternate(rated) {
   return civil.find(a => a.status === "ok") || civil.find(a => a.status === "marginal") || null;
 }
 let altPickHtml = "";
+let ALT_HINT = "", REVERSE_TITLE = "";
 function renderAltPicker(ctx) {
   const sel = $("#altPick");
   const cands = W.altCands;
@@ -1942,16 +1968,111 @@ async function reverseCourse() {
   btn.disabled = true;
   hint.textContent = `Finding an alternate near ${newDest}…`;
   const eta = new Date(+new Date($("#etd").value || Date.now()) + (lastCtx?.sim?.minutes || 90) * 60e3);
-  const cands = await fetchAltCands(newDest);
-  const nbs = leadH(eta) > OUTLOOK_AFTER_H && leadH(eta) < 74 ? await getJSON("/nbm", { prod: "nbs", ids: cands.map(a => a.id).join(",") }).catch(() => null) : null;
-  const best = bestAlternate(rateAltCands(cands, eta, nbs));
+  const best = await alternateNear(newDest, eta);
   btn.disabled = false;
   $("#alt").value = best ? best.id : "";
-  hint.textContent = best
-    ? `Reverse picked ${best.id}, ${Math.round(best.dist)} nm from ${newDest}${best.status === "marginal" ? " (TEMPO/PROB near minimums)" : ""}. Pick another from the list if you prefer.`
-    : `No civil airport within ${ALT_RADIUS} nm of ${newDest} has a TAF meeting alternate minimums at your ETA, so the alternate is blank.`;
+  hint.textContent = altPickNote("Reverse", best, newDest);
+  syncReturn();
   update();
   loadAll();
+}
+async function alternateNear(code, eta) {
+  const cands = await fetchAltCands(code);
+  const nbs = leadH(eta) > OUTLOOK_AFTER_H && leadH(eta) < 74 ? await getJSON("/nbm", { prod: "nbs", ids: cands.map(a => a.id).join(",") }).catch(() => null) : null;
+  return bestAlternate(rateAltCands(cands, eta, nbs));
+}
+const altPickNote = (who, best, dest) => best
+  ? `${who} picked ${best.id}, ${Math.round(best.dist)} nm from ${dest}${best.status === "marginal" ? " (TEMPO/PROB near minimums)" : ""}. Pick another from the list if you prefer.`
+  : `No civil airport within ${ALT_RADIUS} nm of ${dest} has a TAF meeting alternate minimums at your ETA, so the alternate is blank.`;
+
+// ---------- round trip ----------
+const pickLeg = f => Object.fromEntries(LEG_FIELDS.map(k => [k, f[k]]));
+const legOf = which => (which === leg ? pickLeg(readForm()) : legs[which]);
+const legForm = which => (which === leg ? readForm() : { ...readForm(), ...legs[which] });
+const ends = route => { const t = (route || "").trim().toUpperCase().split(/\s+/).filter(Boolean); return t.length > 1 ? `${t[0]} ${t.at(-1)}` : ""; };
+const flipEnds = route => ends(route).split(" ").reverse().join(" ");
+function retEtd() {
+  const t = parseTime24($("#retTime").value), d = $("#retDate").value;
+  $("#retTime").classList.toggle("bad", !t && $("#retTime").value.trim() !== "");
+  return d && t ? `${d}T${t}` : "";
+}
+function retEtdToFields(etd) {
+  const [d, t] = (etd || "").split("T");
+  $("#retDate").value = d || "";
+  $("#retTime").value = t ? t.slice(0, 5) : "";
+  $("#retTime").classList.remove("bad");
+}
+// the return starts as the outbound flown the other way: approaches swapped, same fuel and altitudes
+function deriveReturn(keep) {
+  const o = legOf("out");
+  const r = { ...o, ...(keep || {}) };
+  r.route = o.route.trim().split(/\s+/).reverse().join(" ").toUpperCase();
+  r.destChart = o.depChart; r.depChart = o.destChart;
+  r.destMinCig = o.depMinCig; r.destMinVis = o.depMinVis;
+  r.depMinCig = o.destMinCig; r.depMinVis = o.destMinVis;
+  if (o.depChart) r.destAppr = minimaLineFor(o.depChart);
+  r.alt = ""; r.altChart = "";
+  r.etd = retEtd();
+  return r;
+}
+let retAltSeq = 0;
+async function pickReturnAlternate() {
+  const seq = ++retAltSeq, r = legOf("ret");
+  const dest = r.route.trim().split(/\s+/).at(-1)?.toUpperCase();
+  if (!dest) return;
+  const eta = new Date(+new Date(r.etd || Date.now()) + (lastCtx?.sim?.minutes || 90) * 60e3);
+  const best = await alternateNear(dest, eta);
+  if (seq !== retAltSeq) return;
+  const id = best ? best.id : "";
+  if (leg === "ret") { $("#alt").value = id; $("#alt-hint").textContent = altPickNote("Return", best, dest); } else legs.ret.alt = id;
+  update();
+  loadLeg("ret");
+}
+// (re)build the return when it's new, or when the outbound now starts or ends somewhere else
+function syncReturn() {
+  if (!$("#roundTrip").checked) return false;
+  const o = legOf("out"), r = legs.ret;
+  if (r && ends(r.route) === flipEnds(o.route)) return false;
+  const keep = r ? { fuelGal: r.fuelGal, cruise: r.cruise, power: r.power, altCruise: r.altCruise, night: r.night } : null;
+  legs.ret = deriveReturn(keep);
+  WL.ret = null;
+  pickReturnAlternate();
+  return true;
+}
+function switchLeg(to) {
+  if (to === leg) return;
+  legs[leg] = pickLeg(readForm());
+  WL[leg] = W;
+  leg = to;
+  writeForm(legs[to]);
+  etdToFields();
+  W = WL[to] || { ...blankW(), loading: true };
+  pendingCharts = { destChart: legs[to].destChart, depChart: legs[to].depChart, altChart: legs[to].altChart };
+  $("#alt-hint").textContent = ALT_HINT;
+  $("#reverse").disabled = to === "ret";
+  $("#reverse").title = to === "ret" ? "The return is the outbound flown back; reverse the outbound instead" : REVERSE_TITLE;
+  if (W.loadedAt) { fillCharts(); renderMap(); }
+  update();
+  if (!W.loadedAt) loadLeg(to);
+}
+function renderLegTabs(active) {
+  const r = $("#retAlt");
+  if (document.activeElement !== r) r.value = legOf("ret")?.alt || ""; // mirrors the return leg's alternate
+  const on = $("#roundTrip").checked && !!legs[leg === "out" ? "ret" : "out"];
+  $("#ret-when").hidden = !$("#roundTrip").checked;
+  $("#legtabs").hidden = !on;
+  if (!on) return;
+  for (const which of ["out", "ret"]) {
+    let v;
+    if (which === leg) v = verdictOf(active);
+    else { const keep = W; W = WL[which] || { ...blankW(), loading: true }; try { v = verdictOf(evaluate(legForm(which))); } finally { W = keep; } }
+    const l = legOf(which), when = new Date(l.etd);
+    const btn = $(`#legtabs [data-leg="${which}"]`);
+    btn.className = `legtab ${v.cls}`;
+    btn.setAttribute("aria-selected", which === leg);
+    btn.querySelector(".lt-word").textContent = v.word;
+    btn.querySelector(".lt-sub").textContent = `${ends(l.route).replace(" ", " → ") || "no route"} · ${Number.isNaN(+when) ? "no time" : fmtLocal(when)}`;
+  }
 }
 
 // ---------- form state ----------
@@ -1976,8 +2097,13 @@ function defaults() {
 }
 function update() {
   const f = readForm();
-  if (!pendingCharts) store.set(STORE_KEY, JSON.stringify(f)); // don't overwrite saved approaches before the lists load
-  render(evaluate(f));
+  if (!pendingCharts) { // don't overwrite saved approaches before the lists load
+    store.set(STORE_KEY, JSON.stringify(leg === "out" ? f : { ...f, ...legs.out })); // the saved form is always the outbound
+    if (legs.ret || leg === "ret") store.set(RET_KEY, JSON.stringify(legOf("ret")));
+  }
+  const res = evaluate(f);
+  render(res);
+  renderLegTabs(res);
 }
 
 // ---------- boot ----------
@@ -1993,22 +2119,69 @@ function update() {
     writeForm(saved);
   } else pendingCharts = {};
   etdToFields();
+  try { legs.ret = JSON.parse(store.get(RET_KEY) || "null"); } catch {}
+  if (legs.ret) {
+    if (!legs.ret.etd || new Date(legs.ret.etd) < new Date(Date.now() - 3600e3)) { // stale: the day after the outbound
+      const e = new Date($("#etd").value || Date.now()); e.setDate(e.getDate() + 1); legs.ret.etd = localInput(e);
+    }
+    retEtdToFields(legs.ret.etd);
+  }
+  syncReturn(); // a return that was ticked but never built, or saved for another outbound
   initAircraft(saved);
   setupAircraftEditor();
-  let reloadTimer;
-  const ALT_HINT = $("#alt-hint").textContent;
+  let reloadTimer, retTimer;
+  ALT_HINT = $("#alt-hint").textContent;
+  REVERSE_TITLE = $("#reverse").title;
   FORM.addEventListener("input", e => {
     const id = e.target.id;
+    if (id === "roundTrip") {
+      if (e.target.checked && !$("#retDate").value) { // default: the next day, same time
+        const d = new Date($("#etd").value || Date.now()); d.setDate(d.getDate() + 1); retEtdToFields(localInput(d));
+      }
+      if (!e.target.checked && leg === "ret") switchLeg("out");
+      if (e.target.checked && !syncReturn() && !WL.ret) loadLeg("ret");
+      update();
+      return;
+    }
+    if (id === "retAlt") {
+      const v = e.target.value.trim().toUpperCase();
+      if (leg === "ret") { $("#alt").value = v; $("#alt-hint").textContent = ALT_HINT; } else if (legs.ret) legs.ret.alt = v;
+      retAltSeq++; // the pilot's choice wins over a pick still in flight
+      clearTimeout(retTimer); retTimer = setTimeout(() => loadLeg("ret"), 900);
+      update();
+      return;
+    }
+    if (id === "retDate" || id === "retTime") {
+      const etd = retEtd();
+      if (leg === "ret") { $("#etd").value = etd; etdToFields(); } else if (legs.ret) legs.ret.etd = etd;
+      clearTimeout(retTimer); retTimer = setTimeout(() => loadLeg("ret"), 900);
+      update();
+      return;
+    }
+    if (leg === "ret" && (id === "etdDate" || id === "etdTime")) { fieldsToEtd(); retEtdToFields($("#etd").value); }
     if (e.target.closest("fieldset")?.querySelector(".example")) store.set(EX_KEY, "1");
     if (["destChart", "depChart", "altChart"].includes(id)) chartChosen(id.replace("Chart", ""));
     if (id === "etdDate" || id === "etdTime") fieldsToEtd();
     if (id === "altPick") { if (!e.target.value) return; $("#alt").value = e.target.value; }
     if (id === "alt" || id === "altPick") $("#alt-hint").textContent = ALT_HINT; // drop any note from Reverse
-    if (["route", "alt", "altPick", "etdDate", "etdTime"].includes(id)) { clearTimeout(reloadTimer); reloadTimer = setTimeout(loadAll, 900); }
+    if (["route", "alt", "altPick", "etdDate", "etdTime"].includes(id)) { clearTimeout(reloadTimer); reloadTimer = setTimeout(() => { if (leg === "out") syncReturn(); loadAll(); }, 900); }
     update();
   });
   $("#reload").addEventListener("click", loadAll);
   $("#reverse").addEventListener("click", reverseCourse);
+  // Enlarge: the threat map or vertical profile fills the window; the button or Esc puts it back
+  const enlarge = (card, on) => {
+    card.classList.toggle("expanded", on);
+    document.body.classList.toggle("enlarged", on);
+    const b = card.querySelector("[data-enlarge]");
+    b.textContent = on ? "✕ Close" : "⤢ Enlarge";
+    b.setAttribute("aria-expanded", on);
+    if (card.id === "map-card" && map) map.scrollWheelZoom[on ? "enable" : "disable"](); // the page doesn't scroll behind it
+  };
+  document.addEventListener("click", e => { const b = e.target.closest("[data-enlarge]"); if (b) { const c = b.closest(".card"); enlarge(c, !c.classList.contains("expanded")); } });
+  document.addEventListener("keydown", e => { const c = document.querySelector(".card.expanded"); if (e.key === "Escape" && c) enlarge(c, false); });
+  $("#legtabs").addEventListener("click", e => { const b = e.target.closest("[data-leg]"); if (b) switchLeg(b.dataset.leg); });
+  $("#retTime").addEventListener("blur", () => { const t = parseTime24($("#retTime").value); if (t) $("#retTime").value = t; });
   $("#etdTime").addEventListener("blur", () => { const t = parseTime24($("#etdTime").value); if (t) $("#etdTime").value = t; });
   // Quit: first click asks, second click within 4 s stops the server
   let quitTimer = null;
