@@ -1242,9 +1242,9 @@ function renderMap() {
     const b = [[g.lat - g.dLat / 2, g.lon - g.dLon / 2], [g.lat + g.dLat / 2, g.lon + g.dLon / 2]];
     const c = g.cape != null ? capeColor(g.cape) : null;
     if (c) L.rectangle(b, { stroke: false, fillColor: c, fillOpacity: 0.32 }).bindTooltip(`CAPE ${Math.round(g.cape)} J/kg`).addTo(capeL);
-    const lbl = (txt, color, dy) => L.marker([g.lat, g.lon], { icon: L.divIcon({ className: "grid-label", html: `<span style="color:${color}">${txt}</span>`, iconSize: [44, 14], iconAnchor: [22, 7 + dy] }), interactive: false });
-    if (g.base != null) lbl(`B${String(Math.round(g.base / 100)).padStart(3, "0")}`, g.base < 1000 ? CAT_COLOR.IFR : g.base < 3000 ? CAT_COLOR.MVFR : css("--muted"), -8).addTo(baseL); // below the point
-    if (g.tops != null) lbl(`T${String(Math.round(g.tops / 100)).padStart(3, "0")}`, css("--ink"), 8).addTo(topsL); // above the point
+    const lbl = (txt, color, dy) => L.marker([g.lat, g.lon], { icon: L.divIcon({ className: "grid-label", html: `<span style="color:${color}">${txt}</span>`, iconSize: [58, 18], iconAnchor: [29, 9 + dy] }), interactive: false });
+    if (g.base != null) lbl(`B${String(Math.round(g.base / 100)).padStart(3, "0")}`, g.base < 1000 ? CAT_COLOR.IFR : g.base < 3000 ? CAT_COLOR.MVFR : css("--muted"), -10).addTo(baseL); // below the point
+    if (g.tops != null) lbl(`T${String(Math.round(g.tops / 100)).padStart(3, "0")}`, css("--ink"), 10).addTo(topsL); // above the point
   }
   add("CAPE (model)", capeL);
   add("Cloud base (model)", baseL);
@@ -1279,7 +1279,7 @@ function renderMap() {
     const cat = m.fltCat || category(sum.cig, sum.vis);
     const mk = L.circleMarker([m.lat, m.lon], { radius: 6, color: "#fff", weight: 1, fillColor: CAT_COLOR[cat] || "#888", fillOpacity: 0.95 }).bindPopup(`<b>${esc(m.icaoId)}</b> ${esc(cat)}<br><code style="white-space:pre-wrap">${esc(m.rawOb)}</code>`);
     const cig = sum.cig != null && sum.cig !== Infinity ? String(Math.round(sum.cig / 100)).padStart(3, "0") : "";
-    if (cig && metars.length <= 80) mk.bindTooltip(cig, { permanent: true, direction: "right", offset: [6, 0], className: "wx-label" });
+    if (cig && metars.length <= 80) mk.bindTooltip(cig, { permanent: true, direction: "right", offset: [6, 0], className: "wx-label cig-label" });
     mk.addTo(mL);
   }
   add("METARs: category and ceiling", mL);
