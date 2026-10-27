@@ -63,14 +63,16 @@ You need **Python 3.8 or newer**. The app uses only Python's standard library, s
    - **Windows:** double-click `start-windows.bat`. If Python isn't installed, get it from [python.org](https://www.python.org/downloads/) and tick "Add python.exe to PATH" during setup.
    - **Mac:** double-click `start-mac.command`. The first time, macOS may block it: right-click it, choose **Open**, then **Open** again.
    - **Linux:** run `./start-linux.sh`, or `python3 server.py`.
-3. Your browser opens at <http://127.0.0.1:8737>. Leave the window that started it open while you use the app. The **Quit app** button stops it.
+3. The app opens at <http://127.0.0.1:8737>. If your default browser is Chrome, Edge, Brave or Chromium, it gets its own window, like a desktop program, without tabs or an address bar; with any other browser it opens in a normal tab. (Your settings are saved in the browser, so the app stays in the one you already use.) Leave the window that started it open while you use the app. The **Quit app** button stops it.
 
 The first start downloads airport, runway and navaid data from OurAirports (about 35 MB) and the FAA approach-chart index. They are cached in `~/.cache/ifr-go-no-go/` and refreshed automatically: every week for airports, every 28-day cycle for charts. The first time you plan a flight beyond the TAFs, the app also downloads the National Blend of Models station bulletins (about 50 MB) and keeps them for a few hours.
 
 Options:
 
 ```
-python3 server.py --no-browser     # don't open a browser tab
+python3 server.py --tab            # open in a normal browser tab, not its own window
+python3 server.py --no-browser     # don't open anything
+IFR_BROWSER=brave python3 server.py    # use this browser for the app window, even if it isn't your default
 PORT=9000 python3 server.py        # use another port
 ```
 

@@ -4,8 +4,10 @@
 Serves the app, relays aviationweather.gov (which sends no CORS headers),
 resolves routes, and lists published approaches from the FAA d-TPP.
 
-    python3 server.py              # opens http://127.0.0.1:8737
+    python3 server.py              # opens http://127.0.0.1:8737 in its own app window
+    python3 server.py --tab        # in a normal browser tab instead
     python3 server.py --no-browser
+    IFR_BROWSER=/path/to/chrome python3 server.py   # pick the browser for the app window
     PORT=9000 python3 server.py
 
 Reference data is cached in ~/.cache/ifr-go-no-go/:
@@ -22,6 +24,8 @@ import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -542,6 +546,78 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+# Chromium-family browsers can show a page as an app: its own window, no tabs or address bar. Only the
+# default browser is used for it: the app's settings live in the browser, and another one wouldn't have them.
+APP_BROWSERS = {  # identifier of the default browser -> where its program is
+    "win32": {
+        "MSEdgeHTM": [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe", r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"],
+        "ChromeHTML": [r"%ProgramFiles%\Google\Chrome\Application\chrome.exe", r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+                       r"%LocalAppData%\Google\Chrome\Application\chrome.exe"],
+        "BraveHTML": [r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe", r"%LocalAppData%\BraveSoftware\Brave-Browser\Application\brave.exe"],
+    },
+    "darwin": {
+        "com.google.chrome": ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+        "com.microsoft.edgemac": ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"],
+        "com.brave.browser": ["/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"],
+        "org.chromium.chromium": ["/Applications/Chromium.app/Contents/MacOS/Chromium"],
+    },
+    "linux": {n: [n] for n in ("google-chrome", "google-chrome-stable", "brave", "brave-browser", "chromium", "chromium-browser",
+                                "microsoft-edge", "microsoft-edge-stable")},
+}
+
+
+def default_browser_id():
+    """Windows ProgId, macOS bundle id or Linux program name of the default browser; None if unknown."""
+    try:
+        if sys.platform == "win32":
+            import winreg
+            key = r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                return winreg.QueryValueEx(k, "ProgId")[0].split(".")[0]
+        if sys.platform == "darwin":
+            plist = os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
+            out = subprocess.run(["plutil", "-convert", "json", "-o", "-", plist], capture_output=True, text=True, timeout=5).stdout
+            for h in json.loads(out or "{}").get("LSHandlers", []):
+                if h.get("LSHandlerURLScheme") in ("http", "https"):
+                    return h.get("LSHandlerRoleAll", "").lower()
+            return None  # nothing set: Safari
+        desktop = subprocess.run(["xdg-settings", "get", "default-web-browser"], capture_output=True, text=True, timeout=3).stdout.strip()
+        for d in (os.path.expanduser("~/.local/share/applications"), "/usr/local/share/applications", "/usr/share/applications"):
+            path = os.path.join(d, desktop)
+            if desktop and os.path.isfile(path):
+                with open(path, encoding="utf-8") as f:
+                    exe = next((ln[5:].split()[0] for ln in f if ln.startswith("Exec=")), "")
+                return os.path.basename(exe)
+    except Exception:
+        pass
+    return None
+
+
+def app_browser():
+    if os.environ.get("IFR_BROWSER"):
+        return shutil.which(os.environ["IFR_BROWSER"]) or os.environ["IFR_BROWSER"]
+    table = APP_BROWSERS.get("linux" if sys.platform.startswith("linux") else sys.platform, {})
+    for cand in table.get(default_browser_id(), []):
+        path = os.path.expandvars(cand)
+        found = shutil.which(path) or (path if os.path.isfile(path) else None)
+        if found:
+            return found
+    return None
+
+
+def open_app(url):
+    """Open the app in its own window if the default browser can; otherwise in a normal tab."""
+    exe = None if "--tab" in sys.argv else app_browser()
+    if exe:
+        try:
+            subprocess.Popen([exe, f"--app={url}"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            return
+        except OSError:
+            pass
+    webbrowser.open(url)
+
+
 def main():
     url = f"http://127.0.0.1:{PORT}/"
     try:
@@ -557,14 +633,14 @@ def main():
         if ours:
             print(f"IFR Go/No-Go is already running at {url}")
             if "--no-browser" not in sys.argv:
-                webbrowser.open(url)
+                open_app(url)
             return
         sys.exit(f"Port {PORT} is used by another program. Try: PORT=8738 python3 {sys.argv[0]}")
     print(f"IFR Go/No-Go running at {url}  (Ctrl+C to stop)")
     # warm the reference data so the first route lookup is quick
     threading.Thread(target=lambda: (NAV.load(), APPR.load()), daemon=True).start()
     if "--no-browser" not in sys.argv:
-        webbrowser.open(url)
+        open_app(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
